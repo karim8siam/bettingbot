@@ -5,6 +5,7 @@ Enforces the same strict +EV hurdle and Quarter-Kelly sizing across all sports.
 """
 
 import re
+from strategy.validation import validated_total, match_state
 import time
 from typing import Dict, Any, List, Optional
 from loguru import logger
@@ -113,13 +114,15 @@ class MultiSportEVStrategy(BaseStrategy):
         if line is None:
             return signals
 
-        minute = self._estimate_elapsed_minute(market, sport)
-        home_score = 0
-        away_score = 0
-        if live_stats:
-            minute = live_stats.get("minute", minute)
-            home_score = live_stats.get("home_score", 0)
-            away_score = live_stats.get("away_score", 0)
+        total = validated_total(market)
+        state = match_state(market, live_stats)
+        if total is None or state is None:
+            return signals
+        line, side_one, side_two = total
+        minute, home_score, away_score = state
+        home_red = live_stats.get("home_red", 0) if live_stats else 0
+        away_red = live_stats.get("away_red", 0) if live_stats else 0
+        rolling_sot = live_stats.get("rolling_sot", 0) if live_stats else 0
 
         probs = None
 
@@ -157,7 +160,7 @@ class MultiSportEVStrategy(BaseStrategy):
             best1 = out1_levels[0]
             pct_odds = str(best1.get("percentageOdds", 0))
             if int(pct_odds) > 0:
-                p_model = probs["over"]
+                p_model = probs[side_one]
                 eval1 = self.edge_calculator.evaluate_bet(
                     model_prob=p_model,
                     percentage_odds=pct_odds,
@@ -188,7 +191,7 @@ class MultiSportEVStrategy(BaseStrategy):
             best2 = out2_levels[0]
             pct_odds = str(best2.get("percentageOdds", 0))
             if int(pct_odds) > 0:
-                p_model = probs["under"]
+                p_model = probs[side_two]
                 eval2 = self.edge_calculator.evaluate_bet(
                     model_prob=p_model,
                     percentage_odds=pct_odds,

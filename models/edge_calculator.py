@@ -4,6 +4,7 @@ Calculates statistical edge, implied probability, and Fractional Kelly sizing.
 """
 
 from dataclasses import dataclass
+import math
 from typing import Optional
 from utils.conversions import percentage_odds_to_decimal, percentage_odds_to_probability
 
@@ -63,6 +64,8 @@ class EdgeCalculator:
         """
         Evaluate if a betting opportunity meets the strict mathematical +EV rules.
         """
+        if not math.isfinite(model_prob) or not 0 <= model_prob <= 1:
+            raise ValueError("Model probability must be finite and between zero and one")
         decimal_odds = percentage_odds_to_decimal(percentage_odds)
         market_prob = percentage_odds_to_probability(percentage_odds)
 

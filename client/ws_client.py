@@ -43,16 +43,16 @@ class SXBetRealtimeClient:
 
         channel = f"orderbook_v3:{market_hash}"
 
-        async def on_publication(ctx: "PublicationContext"):
-            try:
-                callback(ctx.data)
-            except Exception as e:
-                logger.error(f"Error handling orderbook update: {e}")
+        class BookHandler(SubscriptionEventHandler):
+            async def on_publication(self, ctx):
+                try:
+                    result = callback(ctx.pub.data)
+                    if asyncio.iscoroutine(result):
+                        await result
+                except Exception as exc:
+                    logger.error(f"Orderbook callback failed ({type(exc).__name__})")
 
-        sub = self.client.new_subscription(
-            channel,
-            SubscriptionEventHandler(on_publication=on_publication),
-        )
+        sub = self.client.new_subscription(channel, BookHandler())
         await sub.subscribe()
         self._subscriptions[channel] = sub
         logger.info(f"Subscribed to {channel}")

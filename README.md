@@ -1,71 +1,64 @@
-# SX Bet Quantitative Live Betting Bot
+# SX Bet paper research bot
 
-A production-grade, mathematically sound live sports betting bot for [SX Bet](https://sx.bet), built on the 7 core principles of quantitative edge seeking:
-1. **Mathematical +EV Barrier** (Only executes when $EV = P_{model} \times Odds - 1 > \text{Min Threshold}$).
-2. **In-Play Poisson & Time-Decay Modeling** (Dynamic scoring intensity, non-linear late-game decay, red card penalties).
-3. **Fractional Kelly Capital Allocation** (Quarter-Kelly staking with single-bet caps).
-4. **Hard Drawdown Circuit Breakers** (Automatic emergency shutdown if daily loss reaches 5%).
-5. **Zero Loss-Chasing** (Strict anti-martingale protection).
-6. **3-Phase Deployment Lifecycle** (Phase 1 Paper Trading → Phase 2 Micro-Stakes → Phase 3 Scaling).
-7. **Closing Line Value (CLV) & Audit Logging** (Tracks every signal, order, and closing price in SQLite).
+Experimental totals-market scanner with simulated positions and optional Telegram alerts.
+The generic Poisson/Gaussian models are **not calibrated evidence of profitability**.
+Live execution is disabled until durable submission, fill, fee, and wallet reconciliation exists.
 
----
+## Setup
 
-## Architecture Overview
+Use Python 3.11+ with OpenSSL, then run from the repository directory:
 
-```
-sx_betting_bot/
-├── config.py                 # Bot configuration & risk parameters
-├── client/
-│   ├── rest_client.py        # SX Bet V3 REST API client (Markets, Orderbook snapshots, Balances)
-│   ├── signer.py             # EIP-712 cryptographic signature engine (keccak256 order digests)
-│   └── ws_client.py          # Real-time WebSocket streaming (Centrifuge) for live books
-├── models/
-│   ├── inplay_poisson.py     # Live football dynamic Poisson scoring rate & time decay
-│   └── edge_calculator.py    # True vs. implied probabilities, EV hurdle, Quarter-Kelly sizing
-├── strategy/
-│   ├── base.py               # Abstract base strategy
-│   └── live_football_ev.py   # In-play football +EV strategy (totals & game-state swings)
-├── engine/
-│   ├── risk_manager.py       # Quarter-Kelly staking, daily stop-loss, bankroll checks
-│   ├── execution.py          # Dual-mode execution engine (Paper Trading vs Live FOK orders)
-│   └── audit_logger.py       # SQLite database logging signals, trades, and CLV
-├── bot.py                    # Interactive CLI runner with live dashboard
-├── test_setup.py             # Diagnostic test suite
-├── .env.example              # Configuration template
-└── requirements.txt          # Verified dependencies
+```sh
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+pip install pytest
+cp .env.example .env
+python -m pytest -q
+python bot.py --dry-run --single-scan
 ```
 
----
+Set `SX_API_KEY` for authenticated orderbook access, including paper scans. No private key is
+needed for paper mode. Optional `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHANNEL_ID` enable outbound
+notifications; this repository has no Telegram command handler. Tests mock Telegram and do
+not send messages. The bot must have permission to post to the configured destination.
 
-## Quickstart
+## Enforced rules
 
-### 1. Activate Environment
-```bash
-source /Users/karimsiam/.gemini/antigravity/scratch/sx_betting_bot/venv/bin/activate
-cd /Users/karimsiam/.gemini/antigravity/scratch/sx_betting_bot
-```
+- Quarter-Kelly by default, capped at 1.5% per position; 5% daily loss budget and three open positions.
+- Open stake consumes the remaining daily risk budget. A $1 minimum never overrides a risk cap.
+  Consequently a $10 bankroll cannot open a position at a 1.5% cap. The example uses $1,000 of simulated capital.
+- Only type-2 regulation full-match Over/Under markets with half-point lines are modeled.
+  Handicap, team/period totals, overtime, integer pushes, and quarter-line splits are excluded.
+- Match start time is not a live score feed. In-play evaluation requires explicit score, clock,
+  and an `updated_at` Unix timestamp no older than 30 seconds. The CLI has no live-score adapter
+  yet, so it skips in-play opportunities and can research pre-match markets within 24 hours.
+- Prices and depth are checked again before simulated execution. This is still a snapshot simulation,
+  not a latency/fee/queue-position execution backtest.
+- Outcome identity is stored with each trade. Unknown settlement stays pending; void returns stake.
+- Cash equals initial capital plus realized net PnL minus pending stakes. Settlement happens once;
+  cash and today's realized losses are restored after restart. Daily boundaries use UTC.
+- Ledgers are separate by network and mode: `data/audit_mainnet_paper.db`, etc. Old `audit.db`
+  is preserved and is **not automatically migrated**: its mixed-mode records and missing outcome
+  identity need manual reconciliation. Keep the same initial bankroll when resuming a ledger.
+- Run only one scanner process per ledger. Concurrent-process execution is not supported.
+- Telegram messages identify simulations, escape market labels, and do not log token-bearing URLs.
 
-### 2. Run Verification Test Suite
-```bash
-python test_setup.py
-```
+## Limits and further work
 
-### 3. Run in Paper Trading Mode (Default: $0 Risk)
-```bash
-python bot.py --dry-run
-```
-Or run a single diagnostic scan:
-```bash
-python bot.py --single-scan
-```
+There is no demonstrated betting edge. League/team priors, red-card feeds, overtime rules, calibration,
+fees, historical validation, and closing-price collection need further work. Basketball/NFL models
+remain generic experiments, not league-validated forecasts. CLV storage exists but the runner does
+not collect closing prices automatically. The WebSocket wrapper is not wired into the polling runner.
 
-### 4. Switch to Live Trading (When Ready)
-1. In `.env`:
-   - Set `DRY_RUN=False`
-   - Set `SX_PRIVATE_KEY="0x..."` (from https://sx.bet/wallet/assets)
-   - Set `SX_API_KEY="..."` (from https://sx.bet/account)
-2. Run:
-```bash
-python bot.py --live
-```
+Before reintroducing live execution, implement persistent order intent, idempotent client order IDs,
+unknown-response recovery, actual fill/fee reconciliation, verified available balance, and exchange
+integration tests. A successful POST is not a confirmed filled bet. `--live` fails explicitly.
+
+## API references checked during review
+
+- [Orderbook snapshot](https://docs.sx.bet/api-reference/get-market-orderbook-snapshot)
+- [Find markets and settlement outcomes](https://docs.sx.bet/api-reference/get-markets-find)
+- [Active-market pagination](https://docs.sx.bet/api-reference/get-markets-active)
+- [Market types](https://docs.sx.bet/api-reference/market-types)
+- [Create orders](https://docs.sx.bet/api-reference/post-orders-v3)

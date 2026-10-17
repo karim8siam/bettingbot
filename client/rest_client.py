@@ -62,25 +62,40 @@ class SXBetClient:
         if league_id:
             params["leagueId"] = league_id
 
-        resp = self.session.get(url, params=params, timeout=self.timeout)
-        resp.raise_for_status()
-        return resp.json().get("data", {}).get("markets", [])
+        markets, seen = [], set()
+        while True:
+            resp = self.session.get(url, params=params, timeout=self.timeout)
+            resp.raise_for_status()
+            payload = resp.json()
+            if payload.get("status") != "success":
+                raise ValueError("SX active markets request failed")
+            data = payload["data"]
+            markets.extend(data.get("markets", []))
+            key = data.get("nextKey")
+            if not key:
+                return markets
+            if key in seen:
+                raise ValueError("SX repeated pagination cursor")
+            seen.add(key)
+            params["paginationKey"] = key
 
     def find_market(self, market_hash: str) -> Optional[Dict[str, Any]]:
         """Look up a specific market by its market hash (including settlement details)."""
         url = f"{self.base_url}/markets/find"
-        params = {"marketHash": market_hash}
+        params = {"marketHashes": market_hash}
         resp = self.session.get(url, params=params, timeout=self.timeout)
-        if resp.status_code == 200:
-            return resp.json().get("data", {}).get("market")
-        return None
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("status") != "success":
+            raise ValueError("SX market lookup failed")
+        return next((m for m in data.get("data", []) if m.get("marketHash") == market_hash), None)
 
     def get_orderbook(self, market_hash: str, show_taker_perspective: bool = True) -> Dict[str, Any]:
         """
         Fetch orderbook snapshot for a specific market.
         With show_taker_perspective=True, percentageOdds is the price to bet that outcome.
         """
-        url = f"{self.base_url}/orderbook-v3/snapshot"
+        url = f"{self.base_url}/orderbook-v3/snapshot/market"
         params = {
             "marketHash": market_hash,
             "showTakerPerspective": str(show_taker_perspective).lower(),
@@ -91,7 +106,7 @@ class SXBetClient:
 
     def get_best_odds(self, market_hashes: List[str]) -> Dict[str, Any]:
         """Fetch best resting odds for a batch of market hashes."""
-        url = f"{self.base_url}/best-odds-v3"
+        url = f"{self.base_url}/orders-v3/odds/best"
         params = {"marketHashes": ",".join(market_hashes)}
         resp = self.session.get(url, params=params, timeout=self.timeout)
         resp.raise_for_status()

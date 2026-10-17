@@ -4,6 +4,7 @@ Enforces bankroll preservation, Fractional Kelly limits, daily stop-loss, and an
 """
 
 from datetime import datetime, date
+import math
 from typing import Tuple
 from loguru import logger
 
@@ -40,15 +41,16 @@ class RiskManager:
         if today != self.current_day:
             logger.info(f"New day detected ({today}). Resetting daily drawdown monitor.")
             self.current_day = today
-            self.initial_daily_bankroll = self.current_bankroll
+            self.initial_daily_bankroll = self.current_bankroll + getattr(self, "pending_stakes", 0.0)
             self.daily_pnl = 0.0
             self.is_circuit_breaker_active = False
 
-    def record_trade_result(self, pnl: float):
+    def record_trade_result(self, pnl: float, stake_usdc: float = 0.0):
         """Update daily PnL and anti-martingale streaks."""
         self.check_new_day()
+        self.pending_stakes = max(0.0, getattr(self, "pending_stakes", 0.0) - stake_usdc)
         self.daily_pnl += pnl
-        self.current_bankroll += pnl
+        self.current_bankroll += stake_usdc + pnl
         self.active_open_trades = max(0, self.active_open_trades - 1)
 
         if pnl < 0:
@@ -84,20 +86,24 @@ class RiskManager:
         if self.current_bankroll <= 5.0:
             return False, 0.0, f"Insufficient bankroll (${self.current_bankroll:.2f}). Minimum $5.00 required."
 
-        if recommended_stake_fraction <= 0:
+        if not math.isfinite(recommended_stake_fraction) or recommended_stake_fraction <= 0:
             return False, 0.0, "Zero or negative stake fraction recommended."
 
         # Cap stake fraction at max single-bet risk limit (e.g. 1.5%)
         capped_fraction = min(recommended_stake_fraction, self.max_stake_pct)
         raw_stake = self.current_bankroll * capped_fraction
 
-        # Round stake to 2 decimals, enforce minimum $1.00 USDC
-        stake_usdc = round(max(1.0, raw_stake), 2)
+        # Never round UP to an exchange minimum or exceed the daily risk budget.
+        pending_stakes = getattr(self, "pending_stakes", 0.0)
+        remaining_loss_budget = max(0.0, self.initial_daily_bankroll * self.max_daily_drawdown_pct
+                                    + min(0.0, self.daily_pnl) - pending_stakes)
+        stake_usdc = math.floor(min(raw_stake, remaining_loss_budget) * 100 + 1e-9) / 100
+        if stake_usdc < 1.0:
+            return False, 0.0, "Minimum $1 stake would exceed sizing or daily risk limit."
 
-        # Ensure stake doesn't exceed maximum single-bet limit in dollars
-        max_single_bet_dollars = self.current_bankroll * self.max_stake_pct
-        if stake_usdc > max_single_bet_dollars and max_single_bet_dollars >= 1.0:
-            stake_usdc = round(max_single_bet_dollars, 2)
-
-        self.active_open_trades += 1
         return True, stake_usdc, f"Approved stake: ${stake_usdc:.2f} USDC ({capped_fraction:.2%} of bankroll)"
+
+    def record_trade_opened(self, stake_usdc: float):
+        self.current_bankroll -= stake_usdc
+        self.pending_stakes = getattr(self, "pending_stakes", 0.0) + stake_usdc
+        self.active_open_trades += 1

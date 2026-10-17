@@ -61,6 +61,10 @@ class AuditLogger:
                     clv_pct REAL
                 )
             """)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(trades)")}
+            for name, kind in [("is_outcome_one", "INTEGER"), ("settled_at", "TEXT")]:
+                if name not in columns:
+                    conn.execute(f"ALTER TABLE trades ADD COLUMN {name} {kind}")
             conn.commit()
 
     def log_signal(
@@ -115,16 +119,17 @@ class AuditLogger:
         stake_usdc: float,
         decimal_odds: float,
         status: str = "FILLED",
+        is_outcome_one: Optional[bool] = None,
     ):
         """Log an executed or simulated trade."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT OR REPLACE INTO trades (
+                INSERT INTO trades (
                     order_id, timestamp, is_paper, market_hash,
-                    event_name, outcome_name, stake_usdc, decimal_odds, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    event_name, outcome_name, stake_usdc, decimal_odds, status, is_outcome_one
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     order_id,
@@ -136,6 +141,7 @@ class AuditLogger:
                     stake_usdc,
                     decimal_odds,
                     status,
+                    is_outcome_one,
                 ),
             )
             conn.commit()
@@ -174,24 +180,24 @@ class AuditLogger:
     def settle_trade(
         self,
         order_id: str,
-        won: bool,
+        won: Optional[bool],
         pnl_usdc: float,
         closing_odds: Optional[float] = None,
     ):
         """Update trade with final settlement result."""
-        result_str = "WON" if won else "LOST"
+        result_str = "VOID" if won is None else ("WON" if won else "LOST")
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
                 UPDATE trades 
-                SET result = ?, pnl_usdc = ?, closing_odds = COALESCE(?, closing_odds)
-                WHERE order_id = ?
+                SET result = ?, pnl_usdc = ?, closing_odds = COALESCE(?, closing_odds), settled_at = ?
+                WHERE order_id = ? AND result = 'PENDING'
                 """,
-                (result_str, pnl_usdc, closing_odds, order_id),
+                (result_str, pnl_usdc, closing_odds, datetime.utcnow().isoformat(), order_id),
             )
             conn.commit()
-        logger.info(f"Settled Trade {order_id}: {result_str} (PnL: ${pnl_usdc:+.2f} USDC)")
+        return cursor.rowcount == 1
 
     def get_trade_summary(self) -> Dict[str, Any]:
         """Fetch cumulative performance metrics."""
@@ -214,3 +220,17 @@ class AuditLogger:
                 "total_pnl": row[3] or 0.0,
                 "avg_clv_pct": (row[4] or 0.0) * 100,
             }
+
+    def restore_risk(self, risk, initial_bankroll):
+        """Reconstruct cash and UTC-day loss budget from this mode/network ledger."""
+        today = datetime.utcnow().date().isoformat()
+        with self._get_connection() as conn:
+            pnl = conn.execute("SELECT COALESCE(SUM(pnl_usdc),0) FROM trades WHERE result != 'PENDING'").fetchone()[0]
+            daily = conn.execute("SELECT COALESCE(SUM(pnl_usdc),0) FROM trades WHERE settled_at LIKE ?", (today + '%',)).fetchone()[0]
+        pending = self.get_pending_trades()
+        risk.pending_stakes = sum(t['stake_usdc'] for t in pending)
+        risk.active_open_trades = len(pending)
+        risk.current_bankroll = initial_bankroll + pnl - risk.pending_stakes
+        risk.daily_pnl = daily
+        risk.initial_daily_bankroll = initial_bankroll + pnl - daily
+        risk.is_circuit_breaker_active = daily <= -risk.initial_daily_bankroll * risk.max_daily_drawdown_pct

@@ -39,7 +39,7 @@ def percentage_odds_to_decimal(percentage_odds: Union[str, int]) -> float:
     Formula: decimalOdds = 10^20 / percentageOdds
     """
     p_int = int(percentage_odds)
-    if p_int <= 0:
+    if not 0 < p_int < PERCENTAGE_ODDS_SCALE:
         raise ValueError(f"Percentage odds must be positive, got {p_int}")
     return PERCENTAGE_ODDS_SCALE / p_int
 

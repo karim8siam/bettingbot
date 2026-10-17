@@ -53,27 +53,22 @@ def check_and_settle_pending_trades(
                 continue
 
             # Check if market has settled/resolved
-            is_settled = market_data.get("settled", False) or market_data.get("status") in ("RESOLVED", "SETTLED")
+            is_settled = market_data.get("settled", False) or market_data.get("status") in ("RESOLVED", "SETTLED") or (market_data.get("status") == "INACTIVE" and bool(market_data.get("reportedDate")))
             if not is_settled:
                 continue
 
-            winning_outcome = market_data.get("outcome") or market_data.get("winningOutcome")
-            # If outcomeOne won and bet was outcomeOne, or outcomeTwo won
-            # SX Bet sets outcome: 1 for outcomeOne, 2 for outcomeTwo
-            won = False
-            outcome_one_name = market_data.get("outcomeOneName", "")
-            if winning_outcome == 1 and outcome_name == outcome_one_name:
-                won = True
-            elif winning_outcome == 2 and outcome_name != outcome_one_name:
-                won = True
-
-            pnl = round(stake_usdc * (decimal_odds - 1.0), 2) if won else -stake_usdc
-
-            # Update audit logger
-            audit_logger.settle_trade(order_id=order_id, won=won, pnl_usdc=pnl)
-            
-            # Update risk manager balance and streak
-            risk_manager.record_trade_result(pnl=pnl)
+            winning_outcome = market_data.get("outcome", market_data.get("winningOutcome"))
+            if str(winning_outcome) not in ("0", "1", "2"):
+                continue  # Unknown is not a loss.
+            winning_outcome = int(winning_outcome)
+            side = trade.get("is_outcome_one")
+            if side is None or trade.get("status") not in ("SIMULATED", "FILLED"):
+                continue  # Legacy unknown selection or unconfirmed submission.
+            won = None if winning_outcome == 0 else winning_outcome == (1 if side else 2)
+            pnl = 0.0 if won is None else (round(stake_usdc * (decimal_odds - 1.0), 2) if won else -stake_usdc)
+            if not audit_logger.settle_trade(order_id=order_id, won=won, pnl_usdc=pnl):
+                continue
+            risk_manager.record_trade_result(pnl=pnl, stake_usdc=stake_usdc)
 
             # Send Telegram Notification #2: Settlement Result
             if telegram_notifier.is_configured:
@@ -98,15 +93,16 @@ def render_banner(dry_run: bool, bankroll: float, daily_pnl: float):
         f"[bold cyan]SX Bet Quantitative Live Betting Bot[/bold cyan]\n"
         f"Mode: {mode_text} | Network: [yellow]{config.network_name.upper()}[/yellow]\n"
         f"Bankroll: [bold white]${bankroll:.2f} USDC[/bold white] | Daily PnL: [{'green' if daily_pnl >= 0 else 'red'}]${daily_pnl:+.2f} USDC[/{'green' if daily_pnl >= 0 else 'red'}]\n"
-        f"Rules: [italic]+EV Hurdle > {config.min_edge_pct:.1%}, Quarter-Kelly Sizing, Max Stake {config.max_stake_pct:.1%}[/italic]"
+        f"Rules: [italic]+EV Hurdle > {config.min_edge_pct:.1%}, Kelly Fraction {config.kelly_fraction:.2f}, Max Stake {config.max_stake_pct:.1%}[/italic]"
     )
     console.print(Panel(banner_content, border_style="cyan"))
 
 
 def main():
     parser = argparse.ArgumentParser(description="SX Bet Quantitative Live Football Betting Bot")
-    parser.add_argument("--dry-run", action="store_true", default=None, help="Force Paper Trading mode")
-    parser.add_argument("--live", action="store_true", default=None, help="Force Live Trading mode (requires API credentials)")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--dry-run", action="store_true", default=None, help="Force Paper Trading mode")
+    modes.add_argument("--live", action="store_true", default=None, help="Force Live Trading mode (requires API credentials)")
     parser.add_argument("--single-scan", action="store_true", help="Run a single market scan and exit")
     args = parser.parse_args()
 
@@ -118,25 +114,19 @@ def main():
     else:
         dry_run = config.dry_run
 
+    if not dry_run:
+        parser.error("Live execution disabled until durable order/fill reconciliation is implemented.")
+
+    if not config.api_key or config.api_key.startswith("your_"):
+        parser.error("Set SX_API_KEY: SX orderbook snapshots require authentication, including paper scans.")
+
     # Initialize components
     logger.info(f"Initializing SX Bet Bot on {config.network_name} (Dry Run = {dry_run})...")
     client = SXBetClient(base_url=config.rest_url, api_key=config.api_key)
-    signer = SXOrderSigner(private_key=config.private_key)
-    audit_logger = AuditLogger(db_path=config.data_dir / "audit.db")
+    signer = SXOrderSigner(private_key="" if dry_run else config.private_key)
+    audit_logger = AuditLogger(db_path=config.data_dir / f"audit_{config.network_name}_{'paper' if dry_run else 'live'}.db")
 
-    # In live mode, attempt to fetch live proxy wallet balance
     current_bankroll = config.initial_bankroll
-    if not dry_run:
-        if not signer.is_configured():
-            console.print("[bold red]Error: Live mode requested but SX_PRIVATE_KEY is missing or invalid in .env[/bold red]")
-            sys.exit(1)
-        try:
-            live_bal = client.get_balance()
-            if live_bal > 0:
-                current_bankroll = live_bal
-                logger.info(f"Loaded live wallet balance: ${current_bankroll:.2f} USDC")
-        except Exception as e:
-            logger.warning(f"Could not fetch live balance: {e}. Using configured bankroll.")
 
     risk_manager = RiskManager(
         current_bankroll=current_bankroll,
@@ -146,7 +136,7 @@ def main():
         max_concurrent_trades=config.max_concurrent_trades,
     )
     # Sync initial active trades count from database
-    risk_manager.active_open_trades = len(audit_logger.get_pending_trades())
+    audit_logger.restore_risk(risk_manager, current_bankroll)
 
     edge_calculator = EdgeCalculator(
         min_edge_pct=config.min_edge_pct,
@@ -264,7 +254,7 @@ def main():
                         market_prob=signal.market_prob,
                         decimal_odds=signal.decimal_odds,
                         edge_pct=signal.edge_pct,
-                        decision="EXECUTE",
+                        decision="CANDIDATE",
                         reason=signal.reason,
                     )
 

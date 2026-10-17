@@ -4,6 +4,7 @@ Sends rich formatted alerts when trades are opened and when results are settled.
 """
 
 from typing import Optional
+from html import escape
 import requests
 from loguru import logger
 
@@ -33,14 +34,14 @@ class TelegramNotifier:
 
         try:
             resp = requests.post(url, json=payload, timeout=10)
-            if resp.status_code == 200:
+            if resp.status_code == 200 and resp.json().get("ok") is True:
                 logger.info("Telegram notification delivered successfully.")
                 return True
             else:
-                logger.error(f"Failed to send Telegram message: {resp.status_code} - {resp.text}")
+                logger.error(f"Telegram rejected notification (HTTP {resp.status_code}).")
                 return False
         except Exception as e:
-            logger.error(f"Telegram request failed: {e}")
+            logger.error(f"Telegram request failed ({type(e).__name__}).")
             return False
 
     def notify_trade_opened(
@@ -57,11 +58,14 @@ class TelegramNotifier:
         is_demo: bool = True,
     ):
         """Notification #1: Sent immediately when a trade is placed."""
+        event_name, outcome_name = escape(event_name), escape(outcome_name)
+        score = escape(str(score)) if score is not None else None
+        mode = "PAPER / SIMULATED" if is_demo else "LIVE"
         time_info = f" | ⏱ {minute}'" if minute is not None else ""
         score_info = f" | ⚽ Score: {score}" if score else ""
 
         message = (
-            f"🎯 <b>NEW SIGNAL TAKEN</b>\n\n"
+            f"🎯 <b>{mode}: NEW SIGNAL TAKEN</b>\n\n"
             f"🏆 <b>Match:</b> {event_name}{time_info}{score_info}\n"
             f"📌 <b>Selection:</b> <code>{outcome_name}</code>\n"
             f"📊 <b>Odds:</b> <code>{decimal_odds:.2f}</code>\n"
@@ -69,7 +73,7 @@ class TelegramNotifier:
             f"📈 <b>Edge (+EV):</b> <b>+{edge_pct:.2%}</b>\n\n"
             f"💵 <b>Stake:</b> ${stake_usdc:.2f} USDC\n"
             f"🏦 <b>Bankroll:</b> ${current_bankroll:.2f} USDC\n"
-            f"🕒 <i>Match in progress...</i>"
+            f"🕒 <i>Awaiting settlement</i>"
         )
         self.send_message(message)
 
@@ -79,14 +83,16 @@ class TelegramNotifier:
         outcome_name: str,
         stake_usdc: float,
         decimal_odds: float,
-        won: bool,
+        won: Optional[bool],
         pnl_usdc: float,
         new_bankroll: float,
         closing_odds: Optional[float] = None,
         is_demo: bool = True,
     ):
         """Notification #2: Sent when the match finishes and the trade is settled."""
-        status_icon = "✅ <b>WON</b>" if won else "❌ <b>LOST</b>"
+        event_name, outcome_name = escape(event_name), escape(outcome_name)
+        mode = "PAPER / SIMULATED" if is_demo else "LIVE"
+        status_icon = "↩️ <b>VOID / REFUNDED</b>" if won is None else ("✅ <b>WON</b>" if won else "❌ <b>LOST</b>")
         pnl_str = f"+${pnl_usdc:.2f}" if pnl_usdc >= 0 else f"-${abs(pnl_usdc):.2f}"
         
         clv_info = ""
@@ -95,7 +101,7 @@ class TelegramNotifier:
             clv_info = f"\n🎯 <b>Closing Line Value (CLV):</b> {clv_pct:+.1f}%"
 
         message = (
-            f"🏁 <b>TRADE RESULT</b>\n\n"
+            f"🏁 <b>{mode}: TRADE RESULT</b>\n\n"
             f"🏆 <b>Match:</b> {event_name}\n"
             f"📌 <b>Selection:</b> <code>{outcome_name}</code> @ {decimal_odds:.2f}\n"
             f"Outcome: {status_icon}\n"

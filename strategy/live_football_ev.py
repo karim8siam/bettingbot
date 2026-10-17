@@ -5,6 +5,7 @@ Targets in-play goal totals and game-state swing mispricings.
 
 import time
 import re
+from strategy.validation import validated_total, match_state
 from typing import Dict, Any, List, Optional
 from loguru import logger
 
@@ -81,20 +82,15 @@ class LiveFootballEVStrategy(BaseStrategy):
         event_name = f"{team1} vs {team2}"
 
         # Current match state
-        minute = self._estimate_elapsed_minute(market)
-        home_score = 0
-        away_score = 0
-        home_red = 0
-        away_red = 0
-        rolling_sot = 0
-
-        if live_stats:
-            minute = live_stats.get("minute", minute)
-            home_score = live_stats.get("home_score", 0)
-            away_score = live_stats.get("away_score", 0)
-            home_red = live_stats.get("home_red", 0)
-            away_red = live_stats.get("away_red", 0)
-            rolling_sot = live_stats.get("rolling_sot", 0)
+        total = validated_total(market)
+        state = match_state(market, live_stats)
+        if total is None or state is None:
+            return signals
+        line, side_one, side_two = total
+        minute, home_score, away_score = state
+        home_red = live_stats.get("home_red", 0) if live_stats else 0
+        away_red = live_stats.get("away_red", 0) if live_stats else 0
+        rolling_sot = live_stats.get("rolling_sot", 0) if live_stats else 0
 
         # We evaluate: Total Goals (Over/Under) for Soccer (lines typically 0.5 to 6.5)
         line = self._parse_over_under_line(market)
@@ -114,7 +110,7 @@ class LiveFootballEVStrategy(BaseStrategy):
             if out1_levels:
                 best1 = out1_levels[0]
                 pct_odds = str(best1["percentageOdds"])
-                p_model = probs["over"]
+                p_model = probs[side_one]
                 eval1 = self.edge_calculator.evaluate_bet(
                     model_prob=p_model,
                     percentage_odds=pct_odds,
@@ -145,7 +141,7 @@ class LiveFootballEVStrategy(BaseStrategy):
             if out2_levels:
                 best2 = out2_levels[0]
                 pct_odds = str(best2["percentageOdds"])
-                p_model = probs["under"]
+                p_model = probs[side_two]
                 eval2 = self.edge_calculator.evaluate_bet(
                     model_prob=p_model,
                     percentage_odds=pct_odds,
