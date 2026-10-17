@@ -1,0 +1,25 @@
+# Sensitive environment and credentials (CRITICAL: NEVER COMMIT)
+.env
+*.env
+
+# Python Virtual Environment
+venv/
+ENV/
+env/
+
+# Python cache & artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Local databases and audit logs
+data/
+*.db
+*.sqlite3
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
