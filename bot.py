@@ -13,6 +13,10 @@ from rich.panel import Panel
 from loguru import logger
 
 from config import config
+from engine.process_lock import ProcessLock
+from client.live_stats import LiveStatsFeed
+from client.streaming_books import StreamingBooks
+from engine.closing_lines import collect_closing_lines
 from client.rest_client import SXBetClient
 from client.signer import SXOrderSigner
 from models.inplay_poisson import InPlayPoissonModel
@@ -166,6 +170,11 @@ def main():
 
     render_banner(dry_run, risk_manager.current_bankroll, risk_manager.daily_pnl)
 
+    live_feed = LiveStatsFeed(config.live_stats_file)
+    stream = StreamingBooks(config.rest_url, config.ws_url, config.api_key) if config.use_websocket else None
+    if stream:
+        stream.start()
+
     # Scanner Loop
     scan_count = 0
     try:
@@ -174,6 +183,11 @@ def main():
             console.print(f"\n[cyan]---> Scan #{scan_count} at {time.strftime('%Y-%m-%d %H:%M:%S')} <---[/cyan]")
 
             try:
+                try:
+                    collect_closing_lines(client, audit_logger)
+                except Exception as exc:
+                    logger.warning(f"Closing-line collection failed ({type(exc).__name__})")
+
                 # 0. Check and settle pending trades from previous scans
                 check_and_settle_pending_trades(
                     client=client,
@@ -211,8 +225,10 @@ def main():
 
                     try:
                         # Fetch orderbook snapshot (taker perspective)
-                        orderbook = client.get_orderbook(market_hash=market_hash, show_taker_perspective=True)
-                        signals = strategy.evaluate_market(market=market, orderbook=orderbook)
+                        orderbook = stream.snapshot(market_hash) if stream else None
+                        if orderbook is None:
+                            orderbook = client.get_orderbook(market_hash=market_hash, show_taker_perspective=True)
+                        signals = strategy.evaluate_market(market=market, orderbook=orderbook, live_stats=live_feed.get(market))
                         all_cycle_signals.extend(signals)
 
                     except Exception as m_err:
@@ -268,6 +284,7 @@ def main():
                         recommended_stake_fraction=signal.recommended_stake_fraction,
                         model_prob=signal.model_prob,
                         edge_pct=signal.edge_pct,
+                        expires_at=signal.expires_at,
                     )
 
                 if signals_found == 0:
@@ -275,6 +292,8 @@ def main():
 
             except Exception as e:
                 logger.error(f"Scan cycle encountered an error: {e}")
+                if args.single_scan:
+                    raise SystemExit(1)
 
             # Performance summary table
             summary = audit_logger.get_trade_summary()
@@ -302,7 +321,16 @@ def main():
 
     except KeyboardInterrupt:
         console.print("\n[bold yellow]Bot stopped by user. Gracefully shutting down...[/bold yellow]")
+    finally:
+        if stream:
+            stream.close()
+        client.session.close()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        with ProcessLock(config.data_dir / f"scanner_{config.network_name}.lock"):
+            main()
+    except RuntimeError as exc:
+        console.print(str(exc), style="red", markup=False)
+        sys.exit(1)

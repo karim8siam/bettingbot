@@ -4,7 +4,8 @@ Defines the structure for all quantitative betting strategies.
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import time
 from typing import Dict, Any, List, Optional
 
 
@@ -22,6 +23,7 @@ class TradeSignal:
     recommended_stake_fraction: float
     strategy_name: str
     reason: str
+    expires_at: float = field(default_factory=lambda: time.time() + 30)
 
 
 class BaseStrategy(ABC):

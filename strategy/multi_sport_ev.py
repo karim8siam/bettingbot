@@ -133,6 +133,9 @@ class MultiSportEVStrategy(BaseStrategy):
                 current_home_goals=home_score,
                 current_away_goals=away_score,
                 line=line,
+                home_red_cards=home_red,
+                away_red_cards=away_red,
+                rolling_sot=rolling_sot,
             )
 
         elif sport == "basketball" and 120.0 <= line <= 260.0:
@@ -216,4 +219,7 @@ class MultiSportEVStrategy(BaseStrategy):
                         )
                     )
 
+        deadline = (float(live_stats['updated_at']) + 30) if live_stats else float(market['gameTime'])
+        for signal in signals:
+            signal.expires_at = min(signal.expires_at, deadline)
         return signals

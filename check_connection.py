@@ -1,99 +1,72 @@
-"""
-SX Bet Connection Diagnostic Utility.
-Verifies your API Key, Private Key, Proxy Wallet, and USDC Balance.
-"""
-
+"""Read-only diagnostics. Never sends a Telegram message or submits an SX order."""
 import sys
-from pathlib import Path
+import requests
 from rich.console import Console
 from rich.table import Table
-from rich.panel import Panel
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
 from config import config
 from client.rest_client import SXBetClient
-from client.signer import SXOrderSigner
 
-console = Console()
+
+def telegram_check(token, chat_id):
+    if not token or not chat_id:
+        raise ValueError('Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID')
+
+    def get(method, **params):
+        try:
+            response = requests.get(f'https://api.telegram.org/bot{token}/{method}', params=params, timeout=10)
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get('ok') is not True:
+                raise ValueError('Telegram rejected request')
+            return payload['result']
+        except requests.RequestException:
+            # Requests exceptions may contain the token-bearing URL.
+            raise ValueError('Telegram authentication/network request failed') from None
+
+    me = get('getMe')
+    chat = get('getChat', chat_id=chat_id)
+    member = get('getChatMember', chat_id=chat_id, user_id=me['id'])
+    status = member.get('status')
+    if status in ('left', 'kicked'):
+        raise ValueError('Bot is not a member of the destination')
+    if chat.get('type') == 'channel' and not (status == 'creator' or (status == 'administrator' and member.get('can_post_messages'))):
+        raise ValueError('Bot needs channel administrator permission to post messages')
+    if status == 'restricted' and not member.get('can_send_messages', False):
+        raise ValueError('Bot is restricted from sending messages')
+    return 'Bot identity and destination membership verified (no message sent)'
 
 
 def check_connection():
-    console.print(Panel("[bold cyan]SX Bet Connection & Account Diagnostic[/bold cyan]", border_style="cyan"))
+    table = Table('Check', 'Status', 'Details')
+    client = SXBetClient(config.rest_url, config.api_key)
+    failures = 0
 
-    client = SXBetClient(base_url=config.rest_url, api_key=config.api_key)
-    signer = SXOrderSigner(private_key=config.private_key)
-
-    table = Table(show_header=True, header_style="bold magenta")
-    table.add_column("Check", style="bold")
-    table.add_column("Status")
-    table.add_column("Details")
-
-    # 1. Network & Public Metadata
-    try:
-        meta = client.get_metadata(force_refresh=True)
-        domain_name = meta.get("domain", {}).get("name", "SX Bet")
-        base_token = meta.get("activeAsset", {}).get("baseToken", "Unknown")
-        table.add_row(
-            "1. Network Metadata",
-            "[bold green]OK[/bold green]",
-            f"Network: {config.network_name} | Token: {base_token[:10]}...",
-        )
-    except Exception as e:
-        table.add_row("1. Network Metadata", "[bold red]FAILED[/bold red]", str(e))
-
-    # 2. Private Key Configuration
-    if signer.is_configured():
-        table.add_row(
-            "2. Private Key (Maker)",
-            "[bold green]CONFIGURED[/bold green]",
-            f"Address: {signer.address}",
-        )
-    else:
-        table.add_row(
-            "2. Private Key (Maker)",
-            "[bold yellow]NOT SET[/bold yellow]",
-            "Using paper trading placeholder key in .env",
-        )
-
-    # 3. API Key & Proxy Wallet
-    if config.api_key and config.api_key != "paper_trading_key":
+    def check(name, action):
+        nonlocal failures
         try:
-            proxy_address = client.get_proxy_wallet()
-            if proxy_address:
-                table.add_row(
-                    "3. Proxy Wallet",
-                    "[bold green]DEPLOYED[/bold green]",
-                    f"Proxy: {proxy_address}",
-                )
-            else:
-                table.add_row(
-                    "3. Proxy Wallet",
-                    "[bold yellow]PENDING / NOT DEPLOYED[/bold yellow]",
-                    "Login to sx.bet once to automatically deploy your proxy wallet",
-                )
-        except Exception as e:
-            table.add_row("3. Proxy Wallet", "[bold red]ERROR[/bold red]", str(e))
+            result = action()
+            table.add_row(name, 'OK', str(result))
+        except Exception as exc:
+            failures += 1
+            # Do not print request bodies, credentials, or exception URLs.
+            detail = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
+            table.add_row(name, 'FAILED', detail)
 
-        # 4. Spendable USDC Balance
-        try:
-            balance = client.get_balance()
-            table.add_row(
-                "4. Spendable Balance",
-                "[bold green]ACTIVE[/bold green]" if balance > 0 else "[bold yellow]0.00 USDC[/bold yellow]",
-                f"${balance:.2f} USDC",
-            )
-        except Exception as e:
-            table.add_row("4. Spendable Balance", "[bold red]ERROR[/bold red]", str(e))
+    check('SX metadata', lambda: client.get_metadata()['domain']['name'])
+    if config.api_key and not config.api_key.startswith('your_'):
+        check('SX spendable balance', lambda: f'{client.get_balance():.6f} USDC')
+        check('SX realtime authentication', lambda: 'Token received' if client.get_realtime_token() else (_ for _ in ()).throw(ValueError('Empty realtime token')))
     else:
-        table.add_row(
-            "3. Proxy Wallet & Balance",
-            "[bold yellow]SKIPPED[/bold yellow]",
-            "Requires valid SX_API_KEY in .env",
-        )
+        failures += 1
+        table.add_row('SX authenticated access', 'NOT CONFIGURED', 'Set SX_API_KEY for orderbook access')
+    if config.telegram_bot_token or config.telegram_channel_id:
+        check('Telegram', lambda: telegram_check(config.telegram_bot_token, config.telegram_channel_id))
+    else:
+        table.add_row('Telegram', 'DISABLED', 'Optional token and channel ID not configured')
+    Console().print(table)
+    client.session.close()
+    return 1 if failures else 0
 
-    console.print(table)
 
-
-if __name__ == "__main__":
-    check_connection()
+if __name__ == '__main__':
+    sys.exit(check_connection())

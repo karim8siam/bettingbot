@@ -63,6 +63,9 @@ class BotConfig(BaseModel):
     target_sports: list[str] = Field(default_factory=lambda: [s.strip().lower() for s in os.getenv("TARGET_SPORTS", "soccer,football").split(",")])
     scan_interval_seconds: int = Field(default_factory=lambda: int(os.getenv("SCAN_INTERVAL_SECONDS", "15")))
     
+    use_websocket: bool = Field(default_factory=lambda: os.getenv("USE_WEBSOCKET", "false").lower() == "true")
+    live_stats_file: str = Field(default_factory=lambda: os.getenv("LIVE_STATS_FILE", ""))
+
     # Paths
     base_dir: Path = BASE_DIR
     data_dir: Path = BASE_DIR / "data"

@@ -130,8 +130,16 @@ class SXBetClient:
         url = f"{self.base_url}/user/balance-v3"
         resp = self.session.get(url, timeout=self.timeout)
         resp.raise_for_status()
-        total_balance_units = resp.json().get("data", {}).get("totalBalance", 0)
-        return units_to_usdc(total_balance_units)
+        payload = resp.json()
+        if payload.get("status") != "success":
+            raise ValueError("SX balance request failed")
+        asset = self.get_metadata()["activeAsset"]
+        rows = [row for row in payload["data"]["balances"]
+                if row["tokenAddress"].lower() == asset["baseToken"].lower()
+                and row["escrowAddress"].lower() == asset["escrowAddress"].lower()]
+        if len(rows) > 1:
+            raise ValueError("Ambiguous active-asset balance")
+        return units_to_usdc(rows[0]["availableAmount"]) if rows else 0.0
 
     def submit_orders(self, orders: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -163,3 +171,36 @@ class SXBetClient:
         resp = self.session.get(url, timeout=self.timeout)
         resp.raise_for_status()
         return resp.json().get("token", "")
+
+    def get_order(self, order_id):
+        """Read an authenticated order, including inactive orders. 404 is unknown."""
+        from urllib.parse import quote
+        resp = self.session.get(f'{self.base_url}/orders-v3/{quote(order_id, safe="")}', timeout=self.timeout)
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        payload = resp.json()
+        if payload.get('status') != 'success':
+            raise ValueError('SX order lookup failed')
+        return payload['data']['order']
+
+    def get_fills(self, order_id):
+        """Read all fill pages for one order; no status filter hides partial state."""
+        params = {'orderId':order_id}
+        fills, seen = {}, set()
+        while True:
+            resp = self.session.get(f'{self.base_url}/fills-v3', params=dict(params), timeout=self.timeout)
+            resp.raise_for_status()
+            payload = resp.json()
+            if payload.get('status') != 'success':
+                raise ValueError('SX fill lookup failed')
+            data = payload['data']
+            for fill in data['fills']:
+                fills[fill['id']] = fill
+            key = data.get('nextKey')
+            if not key:
+                return list(fills.values())
+            if key in seen:
+                raise ValueError('SX repeated fill pagination cursor')
+            seen.add(key)
+            params['nextKey'] = key

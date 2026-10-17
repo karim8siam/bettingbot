@@ -167,4 +167,7 @@ class LiveFootballEVStrategy(BaseStrategy):
                         )
                     )
 
+        deadline = (float(live_stats['updated_at']) + 30) if live_stats else float(market['gameTime'])
+        for signal in signals:
+            signal.expires_at = min(signal.expires_at, deadline)
         return signals

@@ -62,7 +62,7 @@ class AuditLogger:
                 )
             """)
             columns = {row[1] for row in conn.execute("PRAGMA table_info(trades)")}
-            for name, kind in [("is_outcome_one", "INTEGER"), ("settled_at", "TEXT")]:
+            for name, kind in [("is_outcome_one", "INTEGER"), ("settled_at", "TEXT"), ("closing_candidate", "REAL"), ("closing_observed_at", "REAL")]:
                 if name not in columns:
                     conn.execute(f"ALTER TABLE trades ADD COLUMN {name} {kind}")
             conn.commit()
@@ -234,3 +234,13 @@ class AuditLogger:
         risk.daily_pnl = daily
         risk.initial_daily_bankroll = initial_bankroll + pnl - daily
         risk.is_circuit_breaker_active = daily <= -risk.initial_daily_bankroll * risk.max_daily_drawdown_pct
+
+    def save_closing_candidate(self, order_id, odds, observed_at):
+        with self._get_connection() as conn:
+            conn.execute("UPDATE trades SET closing_candidate=?, closing_observed_at=? WHERE order_id=? AND closing_odds IS NULL", (odds, observed_at, order_id))
+
+    def finalize_closing_candidate(self, order_id, kickoff, max_age=30):
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT closing_candidate, closing_observed_at FROM trades WHERE order_id=? AND closing_odds IS NULL", (order_id,)).fetchone()
+        if row and row[0] and row[1] is not None and 0 < kickoff-row[1] <= max_age:
+            self.update_closing_line_value(order_id, row[0])

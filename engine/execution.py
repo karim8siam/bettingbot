@@ -4,6 +4,7 @@ Handles trade routing for both Paper Trading (Dry-Run) and Live SX Bet Orderbook
 """
 
 import uuid
+import time
 from typing import Dict, Any, Optional
 from loguru import logger
 
@@ -44,12 +45,16 @@ class ExecutionEngine:
         edge_pct: float = 0.0,
         minute: Optional[int] = None,
         score: Optional[str] = None,
+        expires_at: Optional[float] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Validate, size, and execute a bet (Paper or Live).
         """
         if not self.dry_run:
             raise RuntimeError("Live execution disabled: durable order/fill reconciliation is not implemented.")
+
+        if expires_at is not None and not time.time() < expires_at:
+            return None
 
         # Step 1: Risk Manager Validation & Sizing
         approved, stake_usdc, reason = self.risk_manager.validate_and_size_stake(
@@ -71,6 +76,9 @@ class ExecutionEngine:
                               and int(level.get("size", 0)) > 0)
         if available_units < usdc_to_units(stake_usdc):
             logger.info("Skipping stale or insufficient orderbook liquidity")
+            return None
+
+        if expires_at is not None and not time.time() < expires_at:
             return None
 
         # Step 2: Route by Execution Mode

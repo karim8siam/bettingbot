@@ -14,7 +14,10 @@ def validated_total(market):
     lines = [float(m[2]) for m in parsed]
     if lines[0] != lines[1] or lines[0] % 1 != .5:
         return None
-    if market.get('line') is not None and float(market['line']) != lines[0]:
+    try:
+        if market.get('line') is not None and float(market['line']) != lines[0]:
+            return None
+    except (ValueError, TypeError):
         return None
     # SX type 2 is regulation full-game totals. Overtime is not modeled.
     if str(market.get('type')) != '2':
@@ -24,13 +27,16 @@ def validated_total(market):
 
 def match_state(market, live_stats):
     now = time.time()
-    start = float(market.get('gameTime', 0))
+    try:
+        start = float(market.get('gameTime', 0))
+    except (ValueError, TypeError):
+        return None
     if not math.isfinite(start) or start <= 0 or market.get('status') != 'ACTIVE':
         return None
     if start > now:
         return (0, 0, 0) if start - now <= 86400 else None
     # Never infer current score or clock from kickoff. Require a fresh feed.
-    if not live_stats:
+    if not isinstance(live_stats, dict):
         return None
     try:
         minute, home, away, timestamp = [float(live_stats[k]) for k in ('minute', 'home_score', 'away_score', 'updated_at')]
@@ -40,4 +46,8 @@ def match_state(market, live_stats):
         return None
     if not 0 <= now - timestamp <= 30 or minute < 0 or home < 0 or away < 0 or not home.is_integer() or not away.is_integer():
         return None
+    for key in ('home_red', 'away_red', 'rolling_sot'):
+        value = live_stats.get(key, 0)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0 or value != int(value):
+            return None
     return minute, int(home), int(away)
