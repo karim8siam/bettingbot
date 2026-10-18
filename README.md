@@ -38,7 +38,8 @@ not send messages. The bot must have permission to post to the configured destin
   not a latency/fee/queue-position execution backtest.
 - Outcome identity is stored with each trade. Unknown settlement stays pending; void returns stake.
 - Cash equals initial capital plus realized net PnL minus pending stakes. Settlement happens once;
-  cash and today's realized losses are restored after restart. Daily boundaries use UTC.
+  cash and today's realized losses are restored after restart. A triggered daily stop remains latched
+  after later wins and restarts. Initial capital is stored and cannot silently change on restart. Daily boundaries use UTC.
 - Ledgers are separate by network and mode: `data/audit_mainnet_paper.db`, etc. Old `audit.db`
   is preserved and is **not automatically migrated**: its mixed-mode records and missing outcome
   identity need manual reconciliation. Keep the same initial bankroll when resuming a ledger.
@@ -48,7 +49,8 @@ not send messages. The bot must have permission to post to the configured destin
 ## Limits and further work
 
 There is no demonstrated betting edge. League/team priors, red-card feeds, overtime rules, calibration,
-fees and historical validation need real inputs. Basketball/NFL models remain generic experiments,
+fees and historical validation need real inputs. Only NBA regulation basketball and NFL regulation football are admitted to their respective models.
+Basketball/NFL models remain generic experiments,
 not league-validated forecasts. The runner records the last observed executable quote before kickoff
 when it is within 30 seconds of kickoff; this is sampled CLV, not a guaranteed market close.
 Optional `USE_WEBSOCKET=true` enables a bounded, versioned cache with polling fallback; execution
@@ -114,7 +116,36 @@ It is preparation for account reconciliation, not a complete automated live exec
 
 ## Validation status
 
-48 tests pass, including a mocked full scan/restart, win/loss/void accounting, source expiry,
+68 tests pass, including a mocked full scan/restart, win/loss/void accounting, source expiry,
 CLV timing, process locking, SX balance selection, partial-fill recovery, Telegram permissions,
 WebSocket ordering and side conversion, and chronological evaluation without holdout leakage.
 Authenticated SX/Telegram and real WebSocket connectivity still require locally configured credentials.
+
+## Reliable alerts and collected forecast data
+
+Trade/settlement records and their alert jobs are committed together in SQLite. Successful alerts
+are marked SENT. Explicit Telegram rate limits are retried later (up to five attempts), without
+sleeping in the scanner. Timeouts, server errors, or a crash during sending are UNKNOWN: they may
+already have delivered, so the bot does not blindly resend them. Permanent failures are FAILED.
+The dashboard shows waiting and attention counts. Changing the channel never reroutes old alerts.
+Exactly-once delivery cannot be guaranteed by Telegram's sendMessage interface.
+
+To inspect unresolved alerts without sending anything:
+
+```sh
+python -c "import sqlite3; c=sqlite3.connect('data/audit_mainnet_paper.db'); print(c.execute(\"SELECT id,state,attempts FROM notifications WHERE state != 'SENT'\").fetchall())"
+```
+
+New paper trades retain the probability seen at entry and the SX event ID. Export settled records:
+
+```sh
+python research/export.py data/audit_mainnet_paper.db --output forecasts.csv
+python research/evaluate.py forecasts.csv --output evaluation.json --cost-per-unit 0.02
+```
+
+The export excludes voids, missing identifiers/probabilities, and duplicate event IDs. It does not
+backfill old trades with invented predictions. Evaluation still requires sufficient real observations.
+
+Additional reliability checks cover capital changes, latched daily stops, transactional alert creation,
+rate limits, ambiguous delivery, changed destinations, malformed/duplicate depth, recovery lookup
+failures, configured expected goals, unsupported leagues, and recorded-forecast export.

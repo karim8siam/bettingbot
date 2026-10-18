@@ -4,6 +4,9 @@ Persists all signals, evaluations, and simulated/live trades into a local SQLite
 """
 
 import sqlite3
+from contextlib import contextmanager
+import json
+import math
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -16,8 +19,14 @@ class AuditLogger:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
-    def _get_connection(self) -> sqlite3.Connection:
-        return sqlite3.connect(str(self.db_path))
+    @contextmanager
+    def _get_connection(self):
+        connection = sqlite3.connect(str(self.db_path))
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def _init_db(self):
         """Create audit tables if they do not exist."""
@@ -61,8 +70,12 @@ class AuditLogger:
                     clv_pct REAL
                 )
             """)
+            conn.execute("CREATE TABLE IF NOT EXISTS ledger_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            conn.execute("CREATE TABLE IF NOT EXISTS notifications (id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload TEXT NOT NULL, destination TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'PENDING', attempts INTEGER NOT NULL DEFAULT 0, next_attempt REAL NOT NULL DEFAULT 0)")
+            # A crash after claiming a send can hide a successful delivery.
+            conn.execute("UPDATE notifications SET state='UNKNOWN' WHERE state='SENDING'")
             columns = {row[1] for row in conn.execute("PRAGMA table_info(trades)")}
-            for name, kind in [("is_outcome_one", "INTEGER"), ("settled_at", "TEXT"), ("closing_candidate", "REAL"), ("closing_observed_at", "REAL")]:
+            for name, kind in [("is_outcome_one", "INTEGER"), ("settled_at", "TEXT"), ("closing_candidate", "REAL"), ("closing_observed_at", "REAL"), ("model_prob", "REAL"), ("event_id", "TEXT")]:
                 if name not in columns:
                     conn.execute(f"ALTER TABLE trades ADD COLUMN {name} {kind}")
             conn.commit()
@@ -120,16 +133,21 @@ class AuditLogger:
         decimal_odds: float,
         status: str = "FILLED",
         is_outcome_one: Optional[bool] = None,
+        model_prob: Optional[float] = None,
+        event_id: Optional[str] = None,
+        notification: Optional[dict] = None,
     ):
-        """Log an executed or simulated trade."""
+        """Log a trade and its alert atomically."""
+        if not math.isfinite(stake_usdc) or stake_usdc <= 0 or not math.isfinite(decimal_odds) or decimal_odds <= 1:
+            raise ValueError("Trade amounts and odds must be valid")
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
                 INSERT INTO trades (
                     order_id, timestamp, is_paper, market_hash,
-                    event_name, outcome_name, stake_usdc, decimal_odds, status, is_outcome_one
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    event_name, outcome_name, stake_usdc, decimal_odds, status, is_outcome_one, model_prob, event_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     order_id,
@@ -142,8 +160,12 @@ class AuditLogger:
                     decimal_odds,
                     status,
                     is_outcome_one,
+                    model_prob,
+                    event_id,
                 ),
             )
+            if notification:
+                self._queue_notification(conn, 'opened:' + order_id, 'opened', notification)
             conn.commit()
         logger.info(
             f"Logged {'[PAPER]' if is_paper else '[LIVE]'} Trade: {event_name} | {outcome_name} | ${stake_usdc:.2f} @ {decimal_odds:.2f}"
@@ -183,8 +205,11 @@ class AuditLogger:
         won: Optional[bool],
         pnl_usdc: float,
         closing_odds: Optional[float] = None,
+        notification: Optional[dict] = None,
     ):
         """Update trade with final settlement result."""
+        if not math.isfinite(pnl_usdc):
+            raise ValueError("Settlement PnL must be finite")
         result_str = "VOID" if won is None else ("WON" if won else "LOST")
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -196,8 +221,11 @@ class AuditLogger:
                 """,
                 (result_str, pnl_usdc, closing_odds, datetime.utcnow().isoformat(), order_id),
             )
+            changed = cursor.rowcount == 1
+            if changed and notification:
+                self._queue_notification(conn, "settled:" + order_id, "settled", notification)
             conn.commit()
-        return cursor.rowcount == 1
+        return changed
 
     def get_trade_summary(self) -> Dict[str, Any]:
         """Fetch cumulative performance metrics."""
@@ -225,6 +253,11 @@ class AuditLogger:
         """Reconstruct cash and UTC-day loss budget from this mode/network ledger."""
         today = datetime.utcnow().date().isoformat()
         with self._get_connection() as conn:
+            conn.execute("INSERT OR IGNORE INTO ledger_meta VALUES ('initial_bankroll', ?)", (str(initial_bankroll),))
+            original = float(conn.execute("SELECT value FROM ledger_meta WHERE key='initial_bankroll'").fetchone()[0])
+            if original != initial_bankroll:
+                raise ValueError(f"This ledger started with {original:.2f}; restore INITIAL_BANKROLL or use a separate ledger")
+            daily_results = [row[0] for row in conn.execute("SELECT pnl_usdc FROM trades WHERE settled_at LIKE ? ORDER BY settled_at, id", (today + '%',))]
             pnl = conn.execute("SELECT COALESCE(SUM(pnl_usdc),0) FROM trades WHERE result != 'PENDING'").fetchone()[0]
             daily = conn.execute("SELECT COALESCE(SUM(pnl_usdc),0) FROM trades WHERE settled_at LIKE ?", (today + '%',)).fetchone()[0]
         pending = self.get_pending_trades()
@@ -233,7 +266,12 @@ class AuditLogger:
         risk.current_bankroll = initial_bankroll + pnl - risk.pending_stakes
         risk.daily_pnl = daily
         risk.initial_daily_bankroll = initial_bankroll + pnl - daily
-        risk.is_circuit_breaker_active = daily <= -risk.initial_daily_bankroll * risk.max_daily_drawdown_pct
+        running = 0.0
+        risk.is_circuit_breaker_active = False
+        for result in daily_results:
+            running += result
+            if running <= -risk.initial_daily_bankroll * risk.max_daily_drawdown_pct:
+                risk.is_circuit_breaker_active = True
 
     def save_closing_candidate(self, order_id, odds, observed_at):
         with self._get_connection() as conn:
@@ -244,3 +282,16 @@ class AuditLogger:
             row = conn.execute("SELECT closing_candidate, closing_observed_at FROM trades WHERE order_id=? AND closing_odds IS NULL", (order_id,)).fetchone()
         if row and row[0] and row[1] is not None and 0 < kickoff-row[1] <= max_age:
             self.update_closing_line_value(order_id, row[0])
+
+    @staticmethod
+    def _queue_notification(conn, event_id, kind, notification):
+        conn.execute("INSERT INTO notifications(id,kind,payload,destination) VALUES (?,?,?,?)", (event_id, kind, json.dumps(notification['payload']), notification['destination']))
+
+    def get_notification_summary(self):
+        with self._get_connection() as conn:
+            counts = dict(conn.execute("SELECT state, COUNT(*) FROM notifications GROUP BY state"))
+        return {
+            'waiting': counts.get('PENDING', 0) + counts.get('RETRY', 0),
+            'attention': counts.get('FAILED', 0) + counts.get('UNKNOWN', 0) + counts.get('SENDING', 0),
+            'sent': counts.get('SENT', 0),
+        }

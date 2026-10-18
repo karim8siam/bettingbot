@@ -5,6 +5,7 @@ Targets in-play goal totals and game-state swing mispricings.
 
 import time
 import re
+from utils.orderbook import levels
 from strategy.validation import validated_total, match_state
 from typing import Dict, Any, List, Optional
 from loguru import logger
@@ -47,25 +48,6 @@ class LiveFootballEVStrategy(BaseStrategy):
 
         return None
 
-    def _estimate_elapsed_minute(self, market: Dict[str, Any]) -> int:
-        """Estimate in-play minute from game start time."""
-        game_time = market.get("gameTime", 0)
-        now = int(time.time())
-        if game_time == 0 or now < game_time:
-            return 0  # Pre-match
-        
-        elapsed_seconds = now - game_time
-        elapsed_minutes = elapsed_seconds // 60
-        
-        # Football matches usually last 105 mins including halftime & injury time
-        if elapsed_minutes < 45:
-            return int(elapsed_minutes)
-        elif 45 <= elapsed_minutes <= 60:
-            return 45  # Halftime break
-        else:
-            # Second half: subtract 15 mins halftime break
-            return min(95, int(elapsed_minutes - 15))
-
     def evaluate_market(
         self,
         market: Dict[str, Any],
@@ -76,6 +58,8 @@ class LiveFootballEVStrategy(BaseStrategy):
         Evaluate live football market against dynamic in-play Poisson model.
         """
         signals: List[TradeSignal] = []
+        if str(market.get("sportLabel", "")).lower() not in ("soccer", "association football"):
+            return signals
         market_hash = market.get("marketHash", "")
         team1 = market.get("teamOneName", "Team 1")
         team2 = market.get("teamTwoName", "Team 2")
@@ -88,6 +72,8 @@ class LiveFootballEVStrategy(BaseStrategy):
             return signals
         line, side_one, side_two = total
         minute, home_score, away_score = state
+        if minute >= 95:
+            return signals
         home_red = live_stats.get("home_red", 0) if live_stats else 0
         away_red = live_stats.get("away_red", 0) if live_stats else 0
         rolling_sot = live_stats.get("rolling_sot", 0) if live_stats else 0
@@ -106,7 +92,7 @@ class LiveFootballEVStrategy(BaseStrategy):
             )
 
             # Check outcome 1 (Typically "Over")
-            out1_levels = orderbook.get("outcomeOne", [])
+            out1_levels = levels(orderbook.get("outcomeOne", []), require_size=False)
             if out1_levels:
                 best1 = out1_levels[0]
                 pct_odds = str(best1["percentageOdds"])
@@ -137,7 +123,7 @@ class LiveFootballEVStrategy(BaseStrategy):
                     )
 
             # Check outcome 2 (Typically "Under")
-            out2_levels = orderbook.get("outcomeTwo", [])
+            out2_levels = levels(orderbook.get("outcomeTwo", []), require_size=False)
             if out2_levels:
                 best2 = out2_levels[0]
                 pct_odds = str(best2["percentageOdds"])
@@ -169,5 +155,6 @@ class LiveFootballEVStrategy(BaseStrategy):
 
         deadline = (float(live_stats['updated_at']) + 30) if live_stats else float(market['gameTime'])
         for signal in signals:
+            signal.event_id = market.get("sportXeventId")
             signal.expires_at = min(signal.expires_at, deadline)
         return signals

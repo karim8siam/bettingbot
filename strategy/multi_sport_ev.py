@@ -5,6 +5,7 @@ Enforces the same strict +EV hurdle and Quarter-Kelly sizing across all sports.
 """
 
 import re
+from utils.orderbook import levels
 from strategy.validation import validated_total, match_state
 import time
 from typing import Dict, Any, List, Optional
@@ -50,51 +51,13 @@ class MultiSportEVStrategy(BaseStrategy):
         sport_label = str(market.get("sportLabel", "")).lower()
         league_label = str(market.get("leagueLabel", "")).lower()
 
-        if "soccer" in sport_label or "football" in sport_label:
-            # Distinguish Association Football vs American Football by league or line
-            line = self._parse_total_line(market)
-            if "nfl" in league_label or "ncaa" in league_label or (line and line > 15.0):
-                return "american_football"
-            return "soccer"
-
-        if "basketball" in sport_label or "nba" in league_label or "wnba" in league_label:
-            return "basketball"
-
-        if "baseball" in sport_label or "mlb" in league_label:
-            return "baseball"
-
-        if "hockey" in sport_label or "nhl" in league_label:
-            return "hockey"
-
-        return sport_label or "unknown"
-
-    def _estimate_elapsed_minute(self, market: Dict[str, Any], sport: str) -> float:
-        """Estimate in-play minute from game start time."""
-        game_time = market.get("gameTime", 0)
-        now = int(time.time())
-        if game_time == 0 or now < game_time:
-            return 0.0
-
-        elapsed_seconds = now - game_time
-        elapsed_minutes = elapsed_seconds / 60.0
-
-        if sport == "soccer":
-            if elapsed_minutes < 45.0:
-                return elapsed_minutes
-            elif 45.0 <= elapsed_minutes <= 60.0:
-                return 45.0
-            else:
-                return min(95.0, elapsed_minutes - 15.0)
-
-        elif sport == "basketball":
-            # 48m regulation NBA game typically takes ~130 real minutes
-            return min(48.0, elapsed_minutes * (48.0 / 130.0))
-
-        elif sport == "american_football":
-            # 60m regulation NFL game typically takes ~190 real minutes
-            return min(60.0, elapsed_minutes * (60.0 / 190.0))
-
-        return elapsed_minutes
+        if sport_label in ('soccer', 'association football'):
+            return 'soccer'
+        if sport_label == 'basketball' and league_label == 'nba':
+            return 'basketball'
+        if sport_label in ('football', 'american football') and league_label == 'nfl':
+            return 'american_football'
+        return 'unsupported'
 
     def evaluate_market(
         self,
@@ -123,6 +86,9 @@ class MultiSportEVStrategy(BaseStrategy):
         home_red = live_stats.get("home_red", 0) if live_stats else 0
         away_red = live_stats.get("away_red", 0) if live_stats else 0
         rolling_sot = live_stats.get("rolling_sot", 0) if live_stats else 0
+
+        if minute >= {"soccer": 95, "basketball": 48, "american_football": 60}.get(sport, 0):
+            return signals
 
         probs = None
 
@@ -158,7 +124,7 @@ class MultiSportEVStrategy(BaseStrategy):
             return signals
 
         # 2. Check Outcome 1 (Typically "Over")
-        out1_levels = orderbook.get("outcomeOne", [])
+        out1_levels = levels(orderbook.get("outcomeOne", []), require_size=False)
         if out1_levels:
             best1 = out1_levels[0]
             pct_odds = str(best1.get("percentageOdds", 0))
@@ -189,7 +155,7 @@ class MultiSportEVStrategy(BaseStrategy):
                     )
 
         # 3. Check Outcome 2 (Typically "Under")
-        out2_levels = orderbook.get("outcomeTwo", [])
+        out2_levels = levels(orderbook.get("outcomeTwo", []), require_size=False)
         if out2_levels:
             best2 = out2_levels[0]
             pct_odds = str(best2.get("percentageOdds", 0))
@@ -221,5 +187,6 @@ class MultiSportEVStrategy(BaseStrategy):
 
         deadline = (float(live_stats['updated_at']) + 30) if live_stats else float(market['gameTime'])
         for signal in signals:
+            signal.event_id = market.get("sportXeventId")
             signal.expires_at = min(signal.expires_at, deadline)
         return signals

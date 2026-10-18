@@ -23,6 +23,7 @@ class TradeSignal:
     recommended_stake_fraction: float
     strategy_name: str
     reason: str
+    event_id: Optional[str] = None
     expires_at: float = field(default_factory=lambda: time.time() + 30)
 
 

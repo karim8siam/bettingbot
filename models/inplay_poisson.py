@@ -9,6 +9,8 @@ from typing import Dict, Tuple
 
 class InPlayPoissonModel:
     def __init__(self, default_match_xg: float = 2.70):
+        if not math.isfinite(default_match_xg) or default_match_xg <= 0:
+            raise ValueError("Expected goals must be positive and finite")
         self.default_match_xg = default_match_xg
 
     def _poisson_pmf(self, k: int, lam: float) -> float:
@@ -26,7 +28,7 @@ class InPlayPoissonModel:
         remaining_minutes = max(0, 95 - minute)
         
         # Base linear remaining fraction
-        base_fraction = remaining_minutes / 90.0
+        base_fraction = remaining_minutes / 95.0
 
         # Non-linear adjustment: After minute 70, goal rates increase by ~20-30%
         # due to defensive fatigue, broken structures, and desperate attacks.
@@ -44,12 +46,14 @@ class InPlayPoissonModel:
         home_red_cards: int = 0,
         away_red_cards: int = 0,
         rolling_sot: int = 0,               # shots on target in last 15 mins
-        prematch_home_xg: float = 1.45,
-        prematch_away_xg: float = 1.25,
+        prematch_home_xg: float = None,
+        prematch_away_xg: float = None,
     ) -> Tuple[float, float]:
         """
         Estimate the expected goals (lambda) for both teams for the REMAINING minutes.
         """
+        prematch_home_xg = self.default_match_xg * .54 if prematch_home_xg is None else prematch_home_xg
+        prematch_away_xg = self.default_match_xg * .46 if prematch_away_xg is None else prematch_away_xg
         rem_fraction = self.calculate_remaining_time_fraction(minute)
 
         # Baseline remaining lambdas
@@ -93,11 +97,14 @@ class InPlayPoissonModel:
         home_red_cards: int = 0,
         away_red_cards: int = 0,
         rolling_sot: int = 0,
-        prematch_total_xg: float = 2.70,
+        prematch_total_xg: float = None,
     ) -> Dict[str, float]:
         """
         Calculate in-play probability for Over/Under {line} total match goals.
         """
+        prematch_total_xg = self.default_match_xg if prematch_total_xg is None else prematch_total_xg
+        if not math.isfinite(prematch_total_xg) or prematch_total_xg <= 0:
+            raise ValueError("Expected goals must be positive and finite")
         current_total = current_home_goals + current_away_goals
         
         # If current total already exceeds line, Over is 100%

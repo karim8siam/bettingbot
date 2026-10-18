@@ -13,6 +13,7 @@ from rich.panel import Panel
 from loguru import logger
 
 from config import config
+from engine.notifications import dispatch_notifications
 from engine.process_lock import ProcessLock
 from client.live_stats import LiveStatsFeed
 from client.streaming_books import StreamingBooks
@@ -70,22 +71,20 @@ def check_and_settle_pending_trades(
                 continue  # Legacy unknown selection or unconfirmed submission.
             won = None if winning_outcome == 0 else winning_outcome == (1 if side else 2)
             pnl = 0.0 if won is None else (round(stake_usdc * (decimal_odds - 1.0), 2) if won else -stake_usdc)
-            if not audit_logger.settle_trade(order_id=order_id, won=won, pnl_usdc=pnl):
+            notification = None
+            if telegram_notifier.is_configured:
+                notification = {
+                    'destination': telegram_notifier.channel_id,
+                    'payload': dict(event_name=event_name, outcome_name=outcome_name,
+                                    stake_usdc=stake_usdc, decimal_odds=decimal_odds,
+                                    won=won, pnl_usdc=pnl,
+                                    new_bankroll=risk_manager.current_bankroll+stake_usdc+pnl,
+                                    is_demo=dry_run),
+                }
+            if not audit_logger.settle_trade(order_id=order_id, won=won, pnl_usdc=pnl, notification=notification):
                 continue
             risk_manager.record_trade_result(pnl=pnl, stake_usdc=stake_usdc)
-
-            # Send Telegram Notification #2: Settlement Result
-            if telegram_notifier.is_configured:
-                telegram_notifier.notify_trade_settled(
-                    event_name=event_name,
-                    outcome_name=outcome_name,
-                    stake_usdc=stake_usdc,
-                    decimal_odds=decimal_odds,
-                    won=won,
-                    pnl_usdc=pnl,
-                    new_bankroll=risk_manager.current_bankroll,
-                    is_demo=dry_run,
-                )
+            dispatch_notifications(audit_logger, telegram_notifier)
 
         except Exception as err:
             logger.debug(f"Error checking settlement for trade {order_id}: {err}")
@@ -183,6 +182,7 @@ def main():
             console.print(f"\n[cyan]---> Scan #{scan_count} at {time.strftime('%Y-%m-%d %H:%M:%S')} <---[/cyan]")
 
             try:
+                dispatch_notifications(audit_logger, telegram_notifier)
                 try:
                     collect_closing_lines(client, audit_logger)
                 except Exception as exc:
@@ -285,6 +285,7 @@ def main():
                         model_prob=signal.model_prob,
                         edge_pct=signal.edge_pct,
                         expires_at=signal.expires_at,
+                        event_id=signal.event_id,
                     )
 
                 if signals_found == 0:
@@ -303,12 +304,15 @@ def main():
             table.add_column("Losses")
             table.add_column("PnL ($ USDC)")
             table.add_column("Avg CLV (%)")
+            table.add_column("Alerts waiting / attention")
+            alerts = audit_logger.get_notification_summary()
             table.add_row(
                 str(summary["total_trades"]),
                 str(summary["wins"]),
                 str(summary["losses"]),
                 f"${summary['total_pnl']:+.2f}",
                 f"{summary['avg_clv_pct']:+.2f}%",
+                f"{alerts['waiting']} / {alerts['attention']}",
             )
             console.print(table)
 

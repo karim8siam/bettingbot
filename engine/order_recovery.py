@@ -7,6 +7,7 @@ are the source of truth. It is separate from the paper bankroll ledger.
 """
 import json
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -18,8 +19,14 @@ class OrderRecovery:
             db.execute('CREATE TABLE IF NOT EXISTS intents (order_id TEXT PRIMARY KEY, client_id TEXT UNIQUE NOT NULL, market_hash TEXT NOT NULL, state TEXT NOT NULL, order_json TEXT, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)')
             db.execute('CREATE TABLE IF NOT EXISTS fills (fill_id TEXT PRIMARY KEY, order_id TEXT NOT NULL, payload TEXT NOT NULL)')
 
+    @contextmanager
     def connect(self):
-        return sqlite3.connect(self.path)
+        connection = sqlite3.connect(str(self.path))
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def register(self, order_id, client_id, market_hash):
         """Persist identity before submission. Duplicate registration is rejected."""
@@ -33,13 +40,25 @@ class OrderRecovery:
             intent = db.execute('SELECT market_hash FROM intents WHERE order_id=?', (order_id,)).fetchone()
         if intent is None:
             raise ValueError('Register the order identity before reconciliation')
-        order = client.get_order(order_id)
+        try:
+            order = client.get_order(order_id)
+        except Exception:
+            self.mark_unknown(order_id)
+            raise
         if order is None:
             # 404 can be transient. Never infer rejection or release exposure.
+            self.mark_unknown(order_id)
             return 'UNKNOWN'
         if order.get('id') != order_id or order.get('marketHash') != intent[0]:
             raise ValueError('Order identity mismatch')
-        fills = client.get_fills(order_id)
+        try:
+            fills = client.get_fills(order_id)
+        except Exception:
+            self.mark_unknown(order_id)
+            raise
+        if len({fill.get("id") for fill in fills}) != len(fills) or any(not fill.get("id") for fill in fills):
+            self.mark_unknown(order_id)
+            raise ValueError("Duplicate or missing fill identity")
         for fill in fills:
             if fill.get('orderId') != order_id or fill.get('marketHash') != intent[0]:
                 raise ValueError('Fill identity mismatch')
@@ -79,3 +98,7 @@ class OrderRecovery:
             row = db.execute('SELECT state, order_json FROM intents WHERE order_id=?',(order_id,)).fetchone()
             fills = [json.loads(r[0]) for r in db.execute('SELECT payload FROM fills WHERE order_id=?',(order_id,))]
         return {'state':row[0], 'order':json.loads(row[1]) if row[1] else None, 'fills':fills} if row else None
+
+    def mark_unknown(self, order_id):
+        with self.connect() as db:
+            db.execute("UPDATE intents SET state='UNKNOWN', updated_at=CURRENT_TIMESTAMP WHERE order_id=?", (order_id,))

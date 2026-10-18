@@ -13,6 +13,7 @@ class TelegramNotifier:
     def __init__(self, bot_token: str = "", channel_id: str = ""):
         self.bot_token = bot_token.strip()
         self.channel_id = channel_id.strip()
+        self.last_delivery = {"state": "UNKNOWN"}
 
     @property
     def is_configured(self) -> bool:
@@ -20,6 +21,7 @@ class TelegramNotifier:
 
     def send_message(self, text: str) -> bool:
         """Send HTML formatted message to Telegram channel."""
+        self.last_delivery = {"state": "UNKNOWN"}
         if not self.is_configured:
             logger.debug(f"[Telegram Notifier Disabled] Would have sent:\n{text}")
             return False
@@ -34,10 +36,17 @@ class TelegramNotifier:
 
         try:
             resp = requests.post(url, json=payload, timeout=10)
-            if resp.status_code == 200 and resp.json().get("ok") is True:
+            data = resp.json()
+            if resp.status_code == 429 or data.get('error_code') == 429:
+                delay = data.get('parameters', {}).get('retry_after', 30)
+                self.last_delivery = {'state': 'RETRY', 'retry_after': min(86400, max(1, int(delay)))}
+                return False
+            if resp.status_code == 200 and data.get("ok") is True:
+                self.last_delivery = {'state': 'SENT'}
                 logger.info("Telegram notification delivered successfully.")
                 return True
             else:
+                self.last_delivery = {"state": "FAILED" if 400 <= resp.status_code < 500 else "UNKNOWN"}
                 logger.error(f"Telegram rejected notification (HTTP {resp.status_code}).")
                 return False
         except Exception as e:
@@ -75,7 +84,7 @@ class TelegramNotifier:
             f"🏦 <b>Bankroll:</b> ${current_bankroll:.2f} USDC\n"
             f"🕒 <i>Awaiting settlement</i>"
         )
-        self.send_message(message)
+        return self.send_message(message)
 
     def notify_trade_settled(
         self,
@@ -108,4 +117,4 @@ class TelegramNotifier:
             f"💵 <b>Net PnL:</b> <b>{pnl_str} USDC</b>\n"
             f"🏦 <b>Updated Bankroll:</b> <b>${new_bankroll:.2f} USDC</b>{clv_info}"
         )
-        self.send_message(message)
+        return self.send_message(message)

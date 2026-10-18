@@ -7,6 +7,7 @@ from typing import Dict, Any, List, Optional
 import requests
 from loguru import logger
 from utils.conversions import units_to_usdc
+from utils.orderbook import levels
 
 
 class SXBetClient:
@@ -33,7 +34,10 @@ class SXBetClient:
         url = f"{self.base_url}/metadata/obv3"
         resp = self.session.get(url, timeout=self.timeout)
         resp.raise_for_status()
-        data = resp.json().get("data", {})
+        payload = resp.json()
+        if payload.get("status") != "success":
+            raise ValueError("SX metadata request failed")
+        data = payload["data"]
         self._metadata = data
         return data
 
@@ -102,7 +106,15 @@ class SXBetClient:
         }
         resp = self.session.get(url, params=params, timeout=self.timeout)
         resp.raise_for_status()
-        return resp.json().get("data", {})
+        payload = resp.json()
+        if payload.get('status') != 'success':
+            raise ValueError('SX orderbook request failed')
+        book = payload['data']
+        if book.get('marketHash', market_hash) != market_hash:
+            raise ValueError('SX orderbook market mismatch')
+        for side in ('outcomeOne', 'outcomeTwo'):
+            book[side] = levels(book.get(side, []))
+        return book
 
     def get_best_odds(self, market_hashes: List[str]) -> Dict[str, Any]:
         """Fetch best resting odds for a batch of market hashes."""

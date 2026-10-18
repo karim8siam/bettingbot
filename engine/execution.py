@@ -5,6 +5,8 @@ Handles trade routing for both Paper Trading (Dry-Run) and Live SX Bet Orderbook
 
 import uuid
 import time
+from engine.notifications import dispatch_notifications
+from utils.orderbook import levels as parse_levels
 from typing import Dict, Any, Optional
 from loguru import logger
 
@@ -46,6 +48,7 @@ class ExecutionEngine:
         minute: Optional[int] = None,
         score: Optional[str] = None,
         expires_at: Optional[float] = None,
+        event_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Validate, size, and execute a bet (Paper or Live).
@@ -70,7 +73,7 @@ class ExecutionEngine:
 
         # Re-fetch immediately before paper execution: a scan may take minutes.
         book = self.client.get_orderbook(market_hash, show_taker_perspective=True)
-        levels = book.get("outcomeOne" if is_outcome_one else "outcomeTwo", [])
+        levels = parse_levels(book.get("outcomeOne" if is_outcome_one else "outcomeTwo", []))
         available_units = sum(int(level.get("size", 0)) for level in levels
                               if 0 < int(level.get("percentageOdds", 0)) <= int(percentage_odds)
                               and int(level.get("size", 0)) > 0)
@@ -88,6 +91,16 @@ class ExecutionEngine:
             logger.success(
                 f"[DRY-RUN SIMULATION] Bet Placed: {event_name} | {outcome_name} | ${stake_usdc:.2f} USDC @ {decimal_odds:.2f} odds (Order ID: {simulated_order_id})"
             )
+            notification = None
+            if self.telegram_notifier and self.telegram_notifier.is_configured:
+                notification = {
+                    'destination': self.telegram_notifier.channel_id,
+                    'payload': dict(event_name=event_name, outcome_name=outcome_name,
+                                    stake_usdc=stake_usdc, decimal_odds=decimal_odds,
+                                    model_prob=model_prob, edge_pct=edge_pct,
+                                    current_bankroll=self.risk_manager.current_bankroll-stake_usdc,
+                                    minute=minute, score=score, is_demo=True),
+                }
             self.audit_logger.log_trade(
                 order_id=simulated_order_id,
                 is_paper=True,
@@ -98,25 +111,16 @@ class ExecutionEngine:
                 decimal_odds=decimal_odds,
                 status="SIMULATED",
                 is_outcome_one=is_outcome_one,
+                model_prob=model_prob,
+                event_id=event_id,
+                notification=notification,
             )
 
             # Deduct stake from simulated bankroll
             self.risk_manager.record_trade_opened(stake_usdc)
 
-            # Telegram Notification #1: Trade Opened
             if self.telegram_notifier:
-                self.telegram_notifier.notify_trade_opened(
-                    event_name=event_name,
-                    outcome_name=outcome_name,
-                    stake_usdc=stake_usdc,
-                    decimal_odds=decimal_odds,
-                    model_prob=model_prob,
-                    edge_pct=edge_pct,
-                    current_bankroll=self.risk_manager.current_bankroll,
-                    minute=minute,
-                    score=score,
-                    is_demo=True,
-                )
+                dispatch_notifications(self.audit_logger, self.telegram_notifier)
 
             return {
                 "order_id": simulated_order_id,
