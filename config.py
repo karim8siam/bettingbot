@@ -55,8 +55,6 @@ class BotConfig(BaseModel):
     # Telegram Channel Alerts
     telegram_bot_token: str = Field(default_factory=lambda: os.getenv("TELEGRAM_BOT_TOKEN", ""))
     telegram_channel_id: str = Field(default_factory=lambda: os.getenv("TELEGRAM_CHANNEL_ID", ""))
-    telegram_hide_demo_tag: bool = Field(default_factory=lambda: os.getenv("TELEGRAM_HIDE_DEMO_TAG", "True").lower() in ("true", "1", "yes"))
-    allow_small_bankroll_floor: bool = Field(default_factory=lambda: os.getenv("ALLOW_SMALL_BANKROLL_FLOOR", "True").lower() in ("true", "1", "yes"))
     
     # Quantitative Filters
     min_edge_pct: float = Field(default_factory=lambda: float(os.getenv("MIN_EDGE_PCT", "0.04")))

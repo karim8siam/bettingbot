@@ -17,7 +17,6 @@ class RiskManager:
         max_stake_pct: float = 0.015,
         max_daily_drawdown_pct: float = 0.05,
         max_concurrent_trades: int = 3,
-        allow_small_bankroll_floor: bool = False,
     ):
         self.initial_daily_bankroll = current_bankroll
         self.current_bankroll = current_bankroll
@@ -25,7 +24,6 @@ class RiskManager:
         self.max_stake_pct = max_stake_pct
         self.max_daily_drawdown_pct = max_daily_drawdown_pct
         self.max_concurrent_trades = max_concurrent_trades
-        self.allow_small_bankroll_floor = allow_small_bankroll_floor
         self.active_open_trades: int = 0
         
         self.current_day: date = datetime.utcnow().date()
@@ -101,10 +99,7 @@ class RiskManager:
                                     + min(0.0, self.daily_pnl) - pending_stakes)
         stake_usdc = math.floor(min(raw_stake, remaining_loss_budget) * 100 + 1e-9) / 100
         if stake_usdc < 1.0:
-            if self.allow_small_bankroll_floor and self.current_bankroll <= 25.0 and remaining_loss_budget >= 1.0 and self.current_bankroll >= 1.0:
-                stake_usdc = 1.0
-            else:
-                return False, 0.0, "Minimum $1 stake would exceed sizing or daily risk limit."
+            return False, 0.0, "Minimum $1 stake would exceed sizing or daily risk limit."
 
         return True, stake_usdc, f"Approved stake: ${stake_usdc:.2f} USDC ({capped_fraction:.2%} of bankroll)"
 

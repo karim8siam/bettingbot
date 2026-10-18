@@ -5,6 +5,8 @@ Provides typed access to public market data, orderbook snapshots, and authentica
 
 from typing import Dict, Any, List, Optional
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from loguru import logger
 from utils.conversions import units_to_usdc
 from utils.orderbook import levels
@@ -16,6 +18,12 @@ class SXBetClient:
         self.api_key = api_key
         self.timeout = timeout
         self.session = requests.Session()
+        # Retry transient read-only failures, never an order submission/cancellation.
+        retries = Retry(total=2, connect=2, read=2, status=2, backoff_factor=0.5,
+                        allowed_methods=frozenset({'GET'}),
+                        status_forcelist=(429, 502, 503, 504),
+                        respect_retry_after_header=False)
+        self.session.mount('https://', HTTPAdapter(max_retries=retries))
         self.session.headers.update({
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 SXBetBot/1.0",
             "Accept": "application/json",
@@ -57,7 +65,7 @@ class SXBetClient:
         sport_id: Optional[int] = None,
         league_id: Optional[int] = None,
         only_main_line: bool = True,
-        max_pages: Optional[int] = 3,
+        max_pages: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Fetch currently active betting markets."""
         url = f"{self.base_url}/markets/active"
@@ -68,6 +76,8 @@ class SXBetClient:
             params["leagueId"] = league_id
 
         markets, seen = [], set()
+        if max_pages is not None and max_pages < 1:
+            raise ValueError('max_pages must be positive')
         pages = 0
         while True:
             resp = self.session.get(url, params=params, timeout=self.timeout)
@@ -78,10 +88,11 @@ class SXBetClient:
             data = payload["data"]
             markets.extend(data.get("markets", []))
             pages += 1
-            if max_pages is not None and pages >= max_pages:
-                return markets
             key = data.get("nextKey")
             if not key:
+                return markets
+            if max_pages is not None and pages >= max_pages:
+                logger.warning(f'Market scan limited to {pages} pages; additional markets were not examined.')
                 return markets
             if key in seen:
                 raise ValueError("SX repeated pagination cursor")

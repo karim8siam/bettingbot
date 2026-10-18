@@ -28,6 +28,7 @@ from engine.execution import ExecutionEngine
 from engine.telegram_notifier import TelegramNotifier
 from strategy.live_football_ev import LiveFootballEVStrategy
 from strategy.multi_sport_ev import MultiSportEVStrategy
+from strategy.validation import validated_total, match_state
 
 console = Console()
 
@@ -107,7 +108,10 @@ def main():
     modes.add_argument("--dry-run", action="store_true", default=None, help="Force Paper Trading mode")
     modes.add_argument("--live", action="store_true", default=None, help="Force Live Trading mode (requires API credentials)")
     parser.add_argument("--single-scan", action="store_true", help="Run a single market scan and exit")
+    parser.add_argument("--max-market-pages", type=int, help="Explicitly limit discovery for a sampled connectivity test")
     args = parser.parse_args()
+    if args.max_market_pages is not None and args.max_market_pages < 1:
+        parser.error('--max-market-pages must be positive')
 
     # Determine mode: command line overrides config
     if args.live:
@@ -118,8 +122,7 @@ def main():
         dry_run = config.dry_run
 
     if not dry_run:
-        if not config.private_key or config.private_key.startswith("your_"):
-            parser.error("Live execution requires SX_PRIVATE_KEY configured in .env")
+        parser.error("Live execution disabled until durable order/fill reconciliation is implemented.")
 
     if not config.api_key or config.api_key.startswith("your_"):
         parser.error("Set SX_API_KEY: SX orderbook snapshots require authentication, including paper scans.")
@@ -138,7 +141,6 @@ def main():
         max_stake_pct=config.max_stake_pct,
         max_daily_drawdown_pct=config.max_daily_drawdown_pct,
         max_concurrent_trades=config.max_concurrent_trades,
-        allow_small_bankroll_floor=config.allow_small_bankroll_floor,
     )
     # Sync initial active trades count from database
     audit_logger.restore_risk(risk_manager, current_bankroll)
@@ -158,7 +160,6 @@ def main():
     telegram_notifier = TelegramNotifier(
         bot_token=config.telegram_bot_token,
         channel_id=config.telegram_channel_id,
-        hide_demo_tag=config.telegram_hide_demo_tag,
     )
 
     execution_engine = ExecutionEngine(
@@ -169,8 +170,6 @@ def main():
         telegram_notifier=telegram_notifier,
         dry_run=dry_run,
     )
-    if not dry_run:
-        execution_engine.enable_live_execution = True
 
     render_banner(dry_run, risk_manager.current_bankroll, risk_manager.daily_pnl)
 
@@ -203,7 +202,10 @@ def main():
                 )
 
                 # 1. Fetch active markets
-                all_markets = client.get_active_markets(only_main_line=False)
+                market_options = {'only_main_line': False}
+                if args.max_market_pages is not None:
+                    market_options['max_pages'] = args.max_market_pages
+                all_markets = client.get_active_markets(**market_options)
                 now_ts = int(time.time())
                 
                 # Filter for target sports and kickoff within next 24 hours (or currently in-play)
@@ -229,11 +231,16 @@ def main():
                         continue
 
                     try:
+                        stats = live_feed.get(market)
+                        if validated_total(market) is None or match_state(market, stats) is None:
+                            continue
+                        if strategy._detect_sport(market) == 'unsupported':
+                            continue
                         # Fetch orderbook snapshot (taker perspective)
                         orderbook = stream.snapshot(market_hash) if stream else None
                         if orderbook is None:
                             orderbook = client.get_orderbook(market_hash=market_hash, show_taker_perspective=True)
-                        signals = strategy.evaluate_market(market=market, orderbook=orderbook, live_stats=live_feed.get(market))
+                        signals = strategy.evaluate_market(market=market, orderbook=orderbook, live_stats=stats)
                         all_cycle_signals.extend(signals)
 
                     except Exception as m_err:
