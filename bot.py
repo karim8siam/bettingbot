@@ -28,6 +28,7 @@ from engine.execution import ExecutionEngine
 from engine.telegram_notifier import TelegramNotifier
 from strategy.live_football_ev import LiveFootballEVStrategy
 from strategy.multi_sport_ev import MultiSportEVStrategy
+from strategy.validation import validated_total, match_state
 
 console = Console()
 
@@ -224,11 +225,16 @@ def main():
                         continue
 
                     try:
+                        stats = live_feed.get(market)
+                        if validated_total(market) is None or match_state(market, stats) is None:
+                            continue
+                        if strategy._detect_sport(market) == 'unsupported':
+                            continue
                         # Fetch orderbook snapshot (taker perspective)
                         orderbook = stream.snapshot(market_hash) if stream else None
                         if orderbook is None:
                             orderbook = client.get_orderbook(market_hash=market_hash, show_taker_perspective=True)
-                        signals = strategy.evaluate_market(market=market, orderbook=orderbook, live_stats=live_feed.get(market))
+                        signals = strategy.evaluate_market(market=market, orderbook=orderbook, live_stats=stats)
                         all_cycle_signals.extend(signals)
 
                     except Exception as m_err:

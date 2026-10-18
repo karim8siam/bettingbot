@@ -116,7 +116,7 @@ It is preparation for account reconciliation, not a complete automated live exec
 
 ## Validation status
 
-71 tests pass, including a mocked full scan/restart, win/loss/void accounting, source expiry,
+72 tests pass, including a mocked full scan/restart, win/loss/void accounting, source expiry,
 CLV timing, process locking, SX balance selection, partial-fill recovery, Telegram permissions,
 WebSocket ordering and side conversion, and chronological evaluation without holdout leakage.
 Authenticated SX/Telegram and real WebSocket connectivity still require locally configured credentials.
@@ -166,3 +166,5 @@ After configuring `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHANNEL_ID` in `.env`, expl
 the two labeled examples with `python preview_notifications.py --telegram`. A failed or
 uncertain delivery stops the command; do not rerun blindly if the first message may have arrived.
 Real market scans additionally require `SX_API_KEY`; in-play scans need a fresh score feed.
+
+Read-only SX requests retry transient connection/read errors and HTTP 429/502/503/504 at most twice. Order submission and cancellation responses are never automatically retried. Unsupported markets and stale/missing score inputs are filtered before requesting order books.
