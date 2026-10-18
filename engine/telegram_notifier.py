@@ -10,9 +10,10 @@ from loguru import logger
 
 
 class TelegramNotifier:
-    def __init__(self, bot_token: str = "", channel_id: str = ""):
+    def __init__(self, bot_token: str = "", channel_id: str = "", hide_demo_tag: bool = False):
         self.bot_token = bot_token.strip()
         self.channel_id = channel_id.strip()
+        self.hide_demo_tag = hide_demo_tag
         self.last_delivery = {"state": "UNKNOWN"}
 
     @property
@@ -69,12 +70,12 @@ class TelegramNotifier:
         """Notification #1: Sent immediately when a trade is placed."""
         event_name, outcome_name = escape(event_name), escape(outcome_name)
         score = escape(str(score)) if score is not None else None
-        mode = "PAPER / SIMULATED" if is_demo else "LIVE"
+        mode_prefix = "" if self.hide_demo_tag else f"{'PAPER / SIMULATED' if is_demo else 'LIVE'}: "
         time_info = f" | ⏱ {minute}'" if minute is not None else ""
         score_info = f" | ⚽ Score: {score}" if score else ""
 
         message = (
-            f"🎯 <b>{mode}: NEW SIGNAL TAKEN</b>\n\n"
+            f"🎯 <b>{mode_prefix}NEW SIGNAL TAKEN</b>\n\n"
             f"🏆 <b>Match:</b> {event_name}{time_info}{score_info}\n"
             f"📌 <b>Selection:</b> <code>{outcome_name}</code>\n"
             f"📊 <b>Odds:</b> <code>{decimal_odds:.2f}</code>\n"
@@ -100,7 +101,7 @@ class TelegramNotifier:
     ):
         """Notification #2: Sent when the match finishes and the trade is settled."""
         event_name, outcome_name = escape(event_name), escape(outcome_name)
-        mode = "PAPER / SIMULATED" if is_demo else "LIVE"
+        mode_prefix = "" if self.hide_demo_tag else f"{'PAPER / SIMULATED' if is_demo else 'LIVE'}: "
         status_icon = "↩️ <b>VOID / REFUNDED</b>" if won is None else ("✅ <b>WON</b>" if won else "❌ <b>LOST</b>")
         pnl_str = f"+${pnl_usdc:.2f}" if pnl_usdc >= 0 else f"-${abs(pnl_usdc):.2f}"
         
@@ -110,7 +111,7 @@ class TelegramNotifier:
             clv_info = f"\n🎯 <b>Closing Line Value (CLV):</b> {clv_pct:+.1f}%"
 
         message = (
-            f"🏁 <b>{mode}: TRADE RESULT</b>\n\n"
+            f"🏁 <b>{mode_prefix}TRADE RESULT</b>\n\n"
             f"🏆 <b>Match:</b> {event_name}\n"
             f"📌 <b>Selection:</b> <code>{outcome_name}</code> @ {decimal_odds:.2f}\n"
             f"Outcome: {status_icon}\n"

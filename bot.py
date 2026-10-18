@@ -118,7 +118,8 @@ def main():
         dry_run = config.dry_run
 
     if not dry_run:
-        parser.error("Live execution disabled until durable order/fill reconciliation is implemented.")
+        if not config.private_key or config.private_key.startswith("your_"):
+            parser.error("Live execution requires SX_PRIVATE_KEY configured in .env")
 
     if not config.api_key or config.api_key.startswith("your_"):
         parser.error("Set SX_API_KEY: SX orderbook snapshots require authentication, including paper scans.")
@@ -137,6 +138,7 @@ def main():
         max_stake_pct=config.max_stake_pct,
         max_daily_drawdown_pct=config.max_daily_drawdown_pct,
         max_concurrent_trades=config.max_concurrent_trades,
+        allow_small_bankroll_floor=config.allow_small_bankroll_floor,
     )
     # Sync initial active trades count from database
     audit_logger.restore_risk(risk_manager, current_bankroll)
@@ -156,6 +158,7 @@ def main():
     telegram_notifier = TelegramNotifier(
         bot_token=config.telegram_bot_token,
         channel_id=config.telegram_channel_id,
+        hide_demo_tag=config.telegram_hide_demo_tag,
     )
 
     execution_engine = ExecutionEngine(
@@ -166,6 +169,8 @@ def main():
         telegram_notifier=telegram_notifier,
         dry_run=dry_run,
     )
+    if not dry_run:
+        execution_engine.enable_live_execution = True
 
     render_banner(dry_run, risk_manager.current_bankroll, risk_manager.daily_pnl)
 
