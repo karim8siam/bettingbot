@@ -132,7 +132,7 @@ def test_telegram_labels_escape_and_api_failure():
         post.return_value=Mock(status_code=200,json=lambda:{'ok':True})
         t.notify_trade_opened('A & <B>','Over <2.5>',1,2,.6,.2,100)
         message=post.call_args.kwargs['json']['text']
-        assert 'PAPER / SIMULATED' in message and 'A &amp; &lt;B&gt;' in message
+        assert 'SIMULATED' in message and 'A &amp; &lt;B&gt;' in message
         t.notify_trade_settled('A','B',1,2,None,0,100)
         assert 'VOID / REFUNDED' in post.call_args.kwargs['json']['text']
         post.return_value.json=lambda:{'ok':False}

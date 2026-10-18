@@ -69,7 +69,7 @@ class TelegramNotifier:
         """Notification #1: Sent immediately when a trade is placed."""
         event_name, outcome_name = escape(event_name), escape(outcome_name)
         score = escape(str(score)) if score is not None else None
-        mode = "PAPER / SIMULATED" if is_demo else "LIVE"
+        mode = "SIMULATED" if is_demo else "LIVE"
         time_info = f" | ⏱ {minute}'" if minute is not None else ""
         score_info = f" | ⚽ Score: {score}" if score else ""
 
@@ -100,7 +100,7 @@ class TelegramNotifier:
     ):
         """Notification #2: Sent when the match finishes and the trade is settled."""
         event_name, outcome_name = escape(event_name), escape(outcome_name)
-        mode = "PAPER / SIMULATED" if is_demo else "LIVE"
+        mode = "SIMULATED" if is_demo else "LIVE"
         status_icon = "↩️ <b>VOID / REFUNDED</b>" if won is None else ("✅ <b>WON</b>" if won else "❌ <b>LOST</b>")
         pnl_str = f"+${pnl_usdc:.2f}" if pnl_usdc >= 0 else f"-${abs(pnl_usdc):.2f}"
         
