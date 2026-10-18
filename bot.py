@@ -108,7 +108,10 @@ def main():
     modes.add_argument("--dry-run", action="store_true", default=None, help="Force Paper Trading mode")
     modes.add_argument("--live", action="store_true", default=None, help="Force Live Trading mode (requires API credentials)")
     parser.add_argument("--single-scan", action="store_true", help="Run a single market scan and exit")
+    parser.add_argument("--max-market-pages", type=int, help="Explicitly limit discovery for a sampled connectivity test")
     args = parser.parse_args()
+    if args.max_market_pages is not None and args.max_market_pages < 1:
+        parser.error('--max-market-pages must be positive')
 
     # Determine mode: command line overrides config
     if args.live:
@@ -199,7 +202,10 @@ def main():
                 )
 
                 # 1. Fetch active markets
-                all_markets = client.get_active_markets(only_main_line=False)
+                market_options = {'only_main_line': False}
+                if args.max_market_pages is not None:
+                    market_options['max_pages'] = args.max_market_pages
+                all_markets = client.get_active_markets(**market_options)
                 now_ts = int(time.time())
                 
                 # Filter for target sports and kickoff within next 24 hours (or currently in-play)

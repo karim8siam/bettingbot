@@ -168,3 +168,10 @@ uncertain delivery stops the command; do not rerun blindly if the first message 
 Real market scans additionally require `SX_API_KEY`; in-play scans need a fresh score feed.
 
 Read-only SX requests retry transient connection/read errors and HTTP 429/502/503/504 at most twice. Order submission and cancellation responses are never automatically retried. Unsupported markets and stale/missing score inputs are filtered before requesting order books.
+
+For a bounded connectivity test, run `python bot.py --dry-run --single-scan --max-market-pages 3`.
+This samples at most three market pages and explicitly reports truncated discovery. Omitting the
+option scans all pages. Successful sampled discovery does not verify all markets or predict results.
+Live routing and hidden simulation labels from the later main-branch change are intentionally
+disabled here: a submission acknowledgement is not a confirmed fill, and simulated outcomes must
+remain distinguishable from real trades. Stake sizing never bypasses the configured percentage cap.

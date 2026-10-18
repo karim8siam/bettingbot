@@ -65,6 +65,7 @@ class SXBetClient:
         sport_id: Optional[int] = None,
         league_id: Optional[int] = None,
         only_main_line: bool = True,
+        max_pages: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Fetch currently active betting markets."""
         url = f"{self.base_url}/markets/active"
@@ -75,6 +76,9 @@ class SXBetClient:
             params["leagueId"] = league_id
 
         markets, seen = [], set()
+        if max_pages is not None and max_pages < 1:
+            raise ValueError('max_pages must be positive')
+        pages = 0
         while True:
             resp = self.session.get(url, params=params, timeout=self.timeout)
             resp.raise_for_status()
@@ -83,8 +87,12 @@ class SXBetClient:
                 raise ValueError("SX active markets request failed")
             data = payload["data"]
             markets.extend(data.get("markets", []))
+            pages += 1
             key = data.get("nextKey")
             if not key:
+                return markets
+            if max_pages is not None and pages >= max_pages:
+                logger.warning(f'Market scan limited to {pages} pages; additional markets were not examined.')
                 return markets
             if key in seen:
                 raise ValueError("SX repeated pagination cursor")
