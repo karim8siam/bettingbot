@@ -42,7 +42,7 @@ class InPlayBasketballModel:
         if rem_minutes <= 0.0:
             return {"over": 1.0 if current_points > line else 0.0, "under": 1.0 if current_points <= line else 0.0}
 
-        base_total = prematch_total or self.default_nba_total
+        base_total = prematch_total if prematch_total is not None else line
         base_pace = base_total / self.total_minutes
 
         # In the 4th quarter (last 4 minutes), if score is within 6 points,
@@ -94,7 +94,7 @@ class InPlayAmericanFootballModel:
         if rem_minutes <= 0.0:
             return {"over": 1.0 if current_points > line else 0.0, "under": 1.0 if current_points <= line else 0.0}
 
-        base_total = prematch_total or self.default_nfl_total
+        base_total = prematch_total if prematch_total is not None else line
         base_pace = base_total / self.total_minutes
 
         expected_rem_points = base_pace * rem_minutes

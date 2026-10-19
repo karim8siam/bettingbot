@@ -21,25 +21,40 @@ class EdgeEvaluation:
 
 
 class EdgeCalculator:
-    def __init__(self, min_edge_pct: float = 0.04, kelly_fraction: float = 0.25, max_stake_pct: float = 0.015):
+    def __init__(
+        self,
+        min_edge_pct: float = 0.04,
+        kelly_fraction: float = 0.25,
+        max_stake_pct: float = 0.015,
+        taker_fee_pct: float = 0.0,
+    ):
         self.min_edge_pct = min_edge_pct
         self.kelly_fraction = kelly_fraction
         self.max_stake_pct = max_stake_pct
+        self.taker_fee_pct = taker_fee_pct
+
+    def get_net_decimal_odds(self, decimal_odds: float) -> float:
+        """Calculate net odds after deducting exchange profit fee (SX Bet 1% taker fee)."""
+        if self.taker_fee_pct > 0 and decimal_odds > 1.0:
+            return 1.0 + (decimal_odds - 1.0) * (1.0 - self.taker_fee_pct)
+        return decimal_odds
 
     def calculate_ev(self, model_prob: float, decimal_odds: float) -> float:
         """
         Calculate expected value percentage.
-        Formula: EV = (model_prob * decimal_odds) - 1.0
+        Formula: EV = (model_prob * net_decimal_odds) - 1.0
         """
-        return (model_prob * decimal_odds) - 1.0
+        net_odds = self.get_net_decimal_odds(decimal_odds)
+        return (model_prob * net_odds) - 1.0
 
     def calculate_kelly_stake(self, model_prob: float, decimal_odds: float) -> float:
         """
         Calculate Fractional Kelly stake percentage of bankroll.
         Full Kelly: f* = (b * p - q) / b
-        where b = decimal_odds - 1, p = model_prob, q = 1 - p.
+        where b = net_decimal_odds - 1, p = model_prob, q = 1 - p.
         """
-        b = decimal_odds - 1.0
+        net_odds = self.get_net_decimal_odds(decimal_odds)
+        b = net_odds - 1.0
         if b <= 0 or model_prob <= 0 or model_prob >= 1.0:
             return 0.0
 

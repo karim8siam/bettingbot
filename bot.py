@@ -147,6 +147,7 @@ def main():
         min_edge_pct=config.min_edge_pct,
         kelly_fraction=config.kelly_fraction,
         max_stake_pct=config.max_stake_pct,
+        taker_fee_pct=0.01,
     )
 
     strategy = MultiSportEVStrategy(
