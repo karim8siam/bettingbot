@@ -249,10 +249,12 @@ def main():
                     elif any(target in str(m.get("sportLabel", "")).lower() or target in str(m.get("leagueLabel", "")).lower() for target in config.target_sports):
                         candidate_markets.append(m)
 
-                # Prioritize near-term kickoff and live matches first
+                # Prioritize near-term kickoff and live matches first (evaluate up to 40 nearest games per cycle)
                 candidate_markets.sort(key=lambda m: (0 if 0 < m.get("gameTime", 0) <= now_ts else 1, m.get("gameTime", 0)))
+                candidate_markets = candidate_markets[:40]
 
-                console.print(f"Found [bold]{len(all_markets)}[/bold] total markets, evaluating [bold green]{len(candidate_markets)}[/bold green] matches within 48h window.")
+                console.print(f"Found [bold]{len(all_markets)}[/bold] total markets, evaluating [bold green]{len(candidate_markets)}[/bold green] nearest matches within 48h window.")
+                import sys; sys.stdout.flush()
 
                 all_cycle_signals = []
 
@@ -362,6 +364,7 @@ def main():
                 break
 
             console.print(f"[dim]Sleeping for {config.scan_interval_seconds}s until next scan... (Ctrl+C to stop)[/dim]")
+            sys.stdout.flush()
             time.sleep(config.scan_interval_seconds)
 
     except KeyboardInterrupt:
