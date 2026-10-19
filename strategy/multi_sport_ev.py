@@ -5,8 +5,9 @@ Enforces the same strict +EV hurdle and Quarter-Kelly sizing across all sports.
 """
 
 import re
-from utils.orderbook import levels
+from utils.orderbook import levels, calculate_vwap_odds
 from strategy.validation import validated_total, match_state
+from models.ensemble import EnsemblePredictor
 import time
 from typing import Dict, Any, List, Optional
 from loguru import logger
@@ -26,6 +27,7 @@ class MultiSportEVStrategy(BaseStrategy):
         super().__init__(name="MultiSportEVStrategy")
         self.edge_calculator = edge_calculator
         self.models = MultiSportModelManager()
+        self.ensemble = EnsemblePredictor()
         self.min_odds = min_odds
         self.max_odds = max_odds
 
@@ -123,16 +125,25 @@ class MultiSportEVStrategy(BaseStrategy):
         if not probs:
             return signals
 
+        # Blend model with devigged market consensus
+        blended_probs = self.ensemble.blend_probabilities(
+            model_probs=probs,
+            orderbook=orderbook,
+            minute=minute,
+            side_one_key=side_one,
+            side_two_key=side_two,
+        )
+
         # 2. Check Outcome 1 (Typically "Over")
         out1_levels = levels(orderbook.get("outcomeOne", []), require_size=False)
         if out1_levels:
-            best1 = out1_levels[0]
-            pct_odds = str(best1.get("percentageOdds", 0))
-            if int(pct_odds) > 0:
-                p_model = probs[side_one]
+            vwap_odds, fill_usdc, worst_pct = calculate_vwap_odds(out1_levels, required_stake_usdc=1.0)
+            target_pct = worst_pct or str(out1_levels[0].get("percentageOdds", 0))
+            if int(target_pct) > 0:
+                p_model = blended_probs[side_one]
                 eval1 = self.edge_calculator.evaluate_bet(
                     model_prob=p_model,
-                    percentage_odds=pct_odds,
+                    percentage_odds=target_pct,
                     min_odds=self.min_odds,
                     max_odds=self.max_odds,
                 )
@@ -143,7 +154,7 @@ class MultiSportEVStrategy(BaseStrategy):
                             event_name=f"[{sport.upper()}] {event_name}",
                             outcome_name=market.get("outcomeOneName", f"Over {line}"),
                             is_outcome_one=True,
-                            percentage_odds=pct_odds,
+                            percentage_odds=target_pct,
                             decimal_odds=eval1.decimal_odds,
                             model_prob=p_model,
                             market_prob=eval1.market_prob,
@@ -157,13 +168,13 @@ class MultiSportEVStrategy(BaseStrategy):
         # 3. Check Outcome 2 (Typically "Under")
         out2_levels = levels(orderbook.get("outcomeTwo", []), require_size=False)
         if out2_levels:
-            best2 = out2_levels[0]
-            pct_odds = str(best2.get("percentageOdds", 0))
-            if int(pct_odds) > 0:
-                p_model = probs[side_two]
+            vwap_odds, fill_usdc, worst_pct = calculate_vwap_odds(out2_levels, required_stake_usdc=1.0)
+            target_pct = worst_pct or str(out2_levels[0].get("percentageOdds", 0))
+            if int(target_pct) > 0:
+                p_model = blended_probs[side_two]
                 eval2 = self.edge_calculator.evaluate_bet(
                     model_prob=p_model,
-                    percentage_odds=pct_odds,
+                    percentage_odds=target_pct,
                     min_odds=self.min_odds,
                     max_odds=self.max_odds,
                 )
@@ -174,7 +185,7 @@ class MultiSportEVStrategy(BaseStrategy):
                             event_name=f"[{sport.upper()}] {event_name}",
                             outcome_name=market.get("outcomeTwoName", f"Under {line}"),
                             is_outcome_one=False,
-                            percentage_odds=pct_odds,
+                            percentage_odds=target_pct,
                             decimal_odds=eval2.decimal_odds,
                             model_prob=p_model,
                             market_prob=eval2.market_prob,
