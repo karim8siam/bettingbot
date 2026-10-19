@@ -101,7 +101,7 @@ class RiskManager:
                                     + min(0.0, self.daily_pnl) - pending_stakes)
         stake_usdc = math.floor(min(raw_stake, remaining_loss_budget) * 100 + 1e-9) / 100
         if stake_usdc < 1.0:
-            if self.allow_small_bankroll_floor and self.current_bankroll <= 25.0 and remaining_loss_budget >= 1.0 and self.current_bankroll >= 1.0:
+            if self.allow_small_bankroll_floor and remaining_loss_budget >= 1.0 and self.current_bankroll >= 1.0:
                 stake_usdc = 1.0
             else:
                 return False, 0.0, "Minimum $1 stake would exceed sizing or daily risk limit."
