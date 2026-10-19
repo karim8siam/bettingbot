@@ -6,7 +6,7 @@ Main entrypoint and interactive terminal runner.
 import sys
 import time
 import argparse
-from typing import List
+from typing import List, Optional, Any
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
@@ -26,6 +26,7 @@ from engine.risk_manager import RiskManager
 from engine.audit_logger import AuditLogger
 from engine.execution import ExecutionEngine
 from engine.telegram_notifier import TelegramNotifier
+from engine.google_sheets import GoogleSheetsLogger
 from strategy.live_football_ev import LiveFootballEVStrategy
 from strategy.multi_sport_ev import MultiSportEVStrategy
 
@@ -38,6 +39,7 @@ def check_and_settle_pending_trades(
     risk_manager: RiskManager,
     telegram_notifier: TelegramNotifier,
     dry_run: bool,
+    google_sheets_logger: Optional[Any] = None,
 ):
     """Scan pending trades and settle those whose markets have resolved on SX Bet."""
     pending = audit_logger.get_pending_trades()
@@ -84,6 +86,16 @@ def check_and_settle_pending_trades(
             if not audit_logger.settle_trade(order_id=order_id, won=won, pnl_usdc=pnl, notification=notification):
                 continue
             risk_manager.record_trade_result(pnl=pnl, stake_usdc=stake_usdc)
+
+            if google_sheets_logger and google_sheets_logger.is_configured:
+                google_sheets_logger.log_trade_settled(
+                    order_id=order_id,
+                    won=won,
+                    pnl_usdc=pnl,
+                    new_bankroll=risk_manager.current_bankroll,
+                    closing_odds=trade.get("closing_odds"),
+                )
+
             dispatch_notifications(audit_logger, telegram_notifier)
 
         except Exception as err:
@@ -162,12 +174,17 @@ def main():
         hide_demo_tag=config.telegram_hide_demo_tag,
     )
 
+    google_sheets_logger = GoogleSheetsLogger(
+        webhook_url=config.google_sheets_webhook_url,
+    )
+
     execution_engine = ExecutionEngine(
         client=client,
         signer=signer,
         risk_manager=risk_manager,
         audit_logger=audit_logger,
         telegram_notifier=telegram_notifier,
+        google_sheets_logger=google_sheets_logger,
         dry_run=dry_run,
     )
     if not dry_run:
@@ -201,6 +218,7 @@ def main():
                     risk_manager=risk_manager,
                     telegram_notifier=telegram_notifier,
                     dry_run=dry_run,
+                    google_sheets_logger=google_sheets_logger,
                 )
 
                 # 1. Fetch active markets

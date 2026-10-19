@@ -26,6 +26,7 @@ class ExecutionEngine:
         risk_manager: RiskManager,
         audit_logger: AuditLogger,
         telegram_notifier: Optional[TelegramNotifier] = None,
+        google_sheets_logger: Optional[Any] = None,
         dry_run: bool = True,
     ):
         self.client = client
@@ -33,6 +34,7 @@ class ExecutionEngine:
         self.risk_manager = risk_manager
         self.audit_logger = audit_logger
         self.telegram_notifier = telegram_notifier
+        self.google_sheets_logger = google_sheets_logger
         self.dry_run = dry_run
 
     def execute_bet(
@@ -118,6 +120,18 @@ class ExecutionEngine:
 
             # Deduct stake from simulated bankroll
             self.risk_manager.record_trade_opened(stake_usdc)
+
+            if self.google_sheets_logger and self.google_sheets_logger.is_configured:
+                self.google_sheets_logger.log_trade_opened(
+                    order_id=simulated_order_id,
+                    event_name=event_name,
+                    outcome_name=outcome_name,
+                    decimal_odds=decimal_odds,
+                    model_prob=model_prob,
+                    edge_pct=edge_pct,
+                    stake_usdc=stake_usdc,
+                    current_bankroll=self.risk_manager.current_bankroll,
+                )
 
             if self.telegram_notifier:
                 dispatch_notifications(self.audit_logger, self.telegram_notifier)

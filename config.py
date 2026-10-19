@@ -57,6 +57,7 @@ class BotConfig(BaseModel):
     telegram_channel_id: str = Field(default_factory=lambda: os.getenv("TELEGRAM_CHANNEL_ID", ""))
     telegram_hide_demo_tag: bool = Field(default_factory=lambda: os.getenv("TELEGRAM_HIDE_DEMO_TAG", "True").lower() in ("true", "1", "yes"))
     allow_small_bankroll_floor: bool = Field(default_factory=lambda: os.getenv("ALLOW_SMALL_BANKROLL_FLOOR", "True").lower() in ("true", "1", "yes"))
+    google_sheets_webhook_url: str = Field(default_factory=lambda: os.getenv("GOOGLE_SHEETS_WEBHOOK_URL", ""))
     
     # Quantitative Filters
     min_edge_pct: float = Field(default_factory=lambda: float(os.getenv("MIN_EDGE_PCT", "0.04")))
