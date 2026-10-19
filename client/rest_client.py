@@ -15,7 +15,15 @@ class SXBetClient:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
         self.session = requests.Session()
+        # Retry transient read-only failures, never order submission/cancellation
+        retries = Retry(total=2, connect=2, read=2, status=2, backoff_factor=0.5,
+                        allowed_methods=frozenset({'GET'}),
+                        status_forcelist=(429, 502, 503, 504),
+                        respect_retry_after_header=False)
+        self.session.mount('https://', HTTPAdapter(max_retries=retries))
         self.session.headers.update({
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 SXBetBot/1.0",
             "Accept": "application/json",

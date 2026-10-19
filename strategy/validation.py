@@ -19,8 +19,10 @@ def validated_total(market):
             return None
     except (ValueError, TypeError):
         return None
-    # SX type 2 is regulation full-game totals. Overtime is not modeled.
-    if str(market.get('type')) != '2':
+    # SX full-game total market types: 2 (Soccer), 28 (Basketball), 52 (American Football)
+    valid_types = {'2', '28', '52'}
+    market_type = str(market.get('type', ''))
+    if market_type and market_type not in valid_types:
         return None
     return lines[0], parsed[0][1].lower(), parsed[1][1].lower()
 
@@ -34,7 +36,7 @@ def match_state(market, live_stats):
     if not math.isfinite(start) or start <= 0 or market.get('status') != 'ACTIVE':
         return None
     if start > now:
-        return (0, 0, 0) if start - now <= 86400 else None
+        return (0, 0, 0) if start - now <= 172800 else None
     # Never infer current score or clock from kickoff. Require a fresh feed.
     if not isinstance(live_stats, dict):
         return None

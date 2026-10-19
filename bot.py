@@ -206,19 +206,19 @@ def main():
                 all_markets = client.get_active_markets(only_main_line=False)
                 now_ts = int(time.time())
                 
-                # Filter for target sports and kickoff within next 24 hours (or currently in-play)
+                # Filter for target sports and kickoff within next 48 hours (or currently in-play)
                 candidate_markets = []
                 for m in all_markets:
                     gt = m.get("gameTime", 0)
-                    if gt > 0 and (gt - now_ts) > 86400:
-                        continue  # Skip games scheduled > 24 hours in future to prevent capital lock
+                    if gt > 0 and (gt - now_ts) > 172800:
+                        continue  # Skip games scheduled > 48 hours in future to prevent capital lock
 
                     if "all" in config.target_sports or "*" in config.target_sports:
                         candidate_markets.append(m)
                     elif any(target in str(m.get("sportLabel", "")).lower() or target in str(m.get("leagueLabel", "")).lower() for target in config.target_sports):
                         candidate_markets.append(m)
 
-                console.print(f"Found [bold]{len(all_markets)}[/bold] total markets, evaluating [bold green]{len(candidate_markets)}[/bold green] matches within 24h window.")
+                console.print(f"Found [bold]{len(all_markets)}[/bold] total markets, evaluating [bold green]{len(candidate_markets)}[/bold green] matches within 48h window.")
 
                 all_cycle_signals = []
 
