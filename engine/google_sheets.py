@@ -1,6 +1,7 @@
 """
 Google Sheets Streaming Logger via Apps Script Webhook.
-Streams trade signals, entries, settlements, and PnL metrics directly to Google Sheets.
+Streams trade signals, entries, settlements, and PnL metrics directly to Google Sheets
+for institutional-grade post-trade analysis and model calibration.
 """
 
 from typing import Optional, Dict, Any
@@ -39,6 +40,10 @@ class GoogleSheetsLogger:
             logger.warning(f"Google Sheets sync failed: {e}")
             return False
 
+    def setup_sheets(self) -> bool:
+        """Remotely initialize or refresh the Analytics Dashboard and Trades sheets."""
+        return self.send_payload({"action": "setup"})
+
     def log_trade_opened(
         self,
         order_id: str,
@@ -49,21 +54,29 @@ class GoogleSheetsLogger:
         edge_pct: float,
         stake_usdc: float,
         current_bankroll: float,
-        sport: str = "Unknown",
+        sport: str = "SOCCER",
+        market_type: str = "TOTALS",
+        market_prob: Optional[float] = None,
+        strategy_tag: str = "MultiSportEV",
+        notes: str = "",
     ) -> bool:
-        """Stream trade opening to Google Sheets."""
+        """Stream new trade entry with rich quantitative diagnostics to Google Sheets."""
+        m_prob_str = f"{market_prob:.1%}" if market_prob is not None else ""
         payload = {
             "action": "open",
             "order_id": order_id,
-            "event_name": event_name,
             "sport": sport.upper(),
+            "event_name": event_name,
+            "market_type": market_type.upper(),
             "outcome_name": outcome_name,
             "decimal_odds": round(decimal_odds, 2),
             "model_prob": f"{model_prob:.1%}",
+            "market_prob": m_prob_str,
             "edge_pct": f"+{edge_pct:.2%}",
+            "strategy_tag": strategy_tag,
             "stake_usdc": round(stake_usdc, 2),
             "bankroll": round(current_bankroll, 2),
-            "status": "OPEN",
+            "notes": notes,
         }
         return self.send_payload(payload)
 
@@ -84,6 +97,5 @@ class GoogleSheetsLogger:
             "pnl_usdc": round(pnl_usdc, 2),
             "bankroll": round(new_bankroll, 2),
             "closing_odds": round(closing_odds, 2) if closing_odds else "",
-            "status": "SETTLED",
         }
         return self.send_payload(payload)

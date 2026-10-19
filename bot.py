@@ -93,7 +93,7 @@ def check_and_settle_pending_trades(
                     won=won,
                     pnl_usdc=pnl,
                     new_bankroll=risk_manager.current_bankroll,
-                    closing_odds=trade.get("closing_odds"),
+                    closing_odds=trade.get("closing_odds") or trade.get("closing_candidate"),
                 )
 
             dispatch_notifications(audit_logger, telegram_notifier)
@@ -310,6 +310,8 @@ def main():
                         edge_pct=signal.edge_pct,
                         expires_at=signal.expires_at,
                         event_id=signal.event_id,
+                        market_prob=signal.market_prob,
+                        strategy_tag=signal.strategy_name,
                     )
 
                 if signals_found == 0:

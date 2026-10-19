@@ -51,12 +51,40 @@ class ExecutionEngine:
         score: Optional[str] = None,
         expires_at: Optional[float] = None,
         event_id: Optional[str] = None,
+        market_prob: Optional[float] = None,
+        sport: Optional[str] = None,
+        market_type: Optional[str] = None,
+        strategy_tag: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Validate, size, and execute a bet (Paper or Live).
         """
         if not self.dry_run and not getattr(self, "enable_live_execution", False):
             raise RuntimeError("Live execution disabled: durable order/fill reconciliation is not implemented.")
+
+        # Auto-detect sport and market type if not explicitly supplied
+        if not sport:
+            if event_name.startswith("[SOCCER]"):
+                sport = "SOCCER"
+            elif event_name.startswith("[BASKETBALL]"):
+                sport = "BASKETBALL"
+            elif event_name.startswith("[AMERICAN_FOOTBALL]") or event_name.startswith("[NFL]"):
+                sport = "AMERICAN_FOOTBALL"
+            elif event_name.startswith("[TENNIS]"):
+                sport = "TENNIS"
+            else:
+                sport = "SOCCER"
+
+        if not market_type:
+            if "over" in outcome_name.lower() or "under" in outcome_name.lower():
+                market_type = "TOTALS"
+            elif "+" in outcome_name or "-" in outcome_name:
+                market_type = "SPREAD"
+            else:
+                market_type = "MONEYLINE"
+
+        if not strategy_tag:
+            strategy_tag = f"MultiSportEV_{sport.lower()}"
 
         if expires_at is not None and not time.time() < expires_at:
             return None
@@ -131,6 +159,10 @@ class ExecutionEngine:
                     edge_pct=edge_pct,
                     stake_usdc=stake_usdc,
                     current_bankroll=self.risk_manager.current_bankroll,
+                    sport=sport,
+                    market_type=market_type,
+                    market_prob=market_prob,
+                    strategy_tag=strategy_tag,
                 )
 
             if self.telegram_notifier:
@@ -205,6 +237,22 @@ class ExecutionEngine:
             )
 
             self.risk_manager.record_trade_opened(stake_usdc)
+
+            if self.google_sheets_logger and self.google_sheets_logger.is_configured:
+                self.google_sheets_logger.log_trade_opened(
+                    order_id=order_id,
+                    event_name=event_name,
+                    outcome_name=outcome_name,
+                    decimal_odds=decimal_odds,
+                    model_prob=model_prob,
+                    edge_pct=edge_pct,
+                    stake_usdc=stake_usdc,
+                    current_bankroll=self.risk_manager.current_bankroll,
+                    sport=sport,
+                    market_type=market_type,
+                    market_prob=market_prob,
+                    strategy_tag=strategy_tag,
+                )
 
             if self.telegram_notifier:
                 dispatch_notifications(self.audit_logger, self.telegram_notifier)
