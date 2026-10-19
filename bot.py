@@ -69,6 +69,12 @@ def check_and_settle_pending_trades(
                 continue  # Unknown is not a loss.
             winning_outcome = int(winning_outcome)
             side = trade.get("is_outcome_one")
+            if side is None:
+                if trade.get("outcome_name") and trade.get("outcome_name") == market_data.get("outcomeOneName"):
+                    side = True
+                elif trade.get("outcome_name") and trade.get("outcome_name") == market_data.get("outcomeTwoName"):
+                    side = False
+
             if side is None or trade.get("status") not in ("SIMULATED", "FILLED"):
                 continue  # Legacy unknown selection or unconfirmed submission.
             won = None if winning_outcome == 0 else winning_outcome == (1 if side else 2)
