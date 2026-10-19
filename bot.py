@@ -203,6 +203,9 @@ def main():
     if stream:
         stream.start()
 
+    cached_markets = []
+    last_markets_fetch = 0
+
     # Scanner Loop
     scan_count = 0
     try:
@@ -227,10 +230,13 @@ def main():
                     google_sheets_logger=google_sheets_logger,
                 )
 
-                # 1. Fetch active markets
-                all_markets = client.get_active_markets(only_main_line=False)
+                # 1. Fetch active markets across all sports (up to 1,000 markets)
                 now_ts = int(time.time())
-                
+                if not cached_markets or (now_ts - last_markets_fetch) > 90:
+                    cached_markets = client.get_active_markets(only_main_line=False, max_pages=10)
+                    last_markets_fetch = now_ts
+                all_markets = cached_markets
+
                 # Filter for target sports and kickoff within next 48 hours (or currently in-play)
                 candidate_markets = []
                 for m in all_markets:
